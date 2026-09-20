@@ -180,7 +180,7 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    match state.sessions.new_session(provider, model, effort, working_dir) {
+    match state.sessions.new_session(provider, model, effort, working_dir, &state.auth) {
         Ok(session) => {
             info!(session_id = %session.id, provider = %session.provider.as_str(),
                   model = %session.model, "created session");
@@ -192,7 +192,8 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
                     "provider": info.provider,
                     "model": info.model,
                     "effort": info.effort,
-                    "monitterPhase": "2",
+                    "providerName": info.provider_name,
+                    "monitterPhase": "3.5",
                     "jev_routing": true,
                 }),
             )

@@ -18,6 +18,7 @@
 pub mod auth;
 pub mod initialize;
 pub mod policy;
+pub mod provider;
 pub mod provider_whitelist;
 pub mod server;
 pub mod session;
@@ -27,6 +28,7 @@ pub mod turn;
 pub use auth::{Auth, AuthRegistry};
 pub use initialize::initialize_result;
 pub use policy::JevRoutePolicy;
+pub use provider::{ProviderHandle, build_provider_for_session};
 pub use provider_whitelist::{SupportedProvider, parse_provider};
 pub use server::{run_acp_server, ServerState};
 pub use trace::{RouterTrace, TraceTrigger};

@@ -547,3 +547,115 @@ fn auth_loader_picks_up_api_key_file() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&tmp_home);
 }
+
+/// Phase 3.5: when auth is configured, `session/new` attaches a
+/// `ProviderHandle` and the response includes `providerName`. When auth is
+/// not configured, the response still includes `provider` but
+/// `providerName` is `null`.
+#[test]
+fn session_new_reports_provider_name_when_auth_configured() {
+    let bin = mona_acp_bin();
+    if !bin.exists() {
+        eprintln!("skipping: {} not built yet", bin.display());
+        return;
+    }
+
+    // ── Case A: auth configured → providerName is the stub's name() ──
+    let tmp_home = std::env::temp_dir().join(format!("mona-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp_home).unwrap();
+    std::fs::write(
+        tmp_home.join("codex.json"),
+        r#"{"kind":"openai_api_key","api_key":"sk-test-1234567890abcdef"}"#,
+    )
+    .unwrap();
+
+    let mut child = Command::new(&bin)
+        .env("MONA_ACP_LOG", "error")
+        .env("MONA_HOME", &tmp_home)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("MINIMAX_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mona-acp (configured)");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"session/new","params":{{"provider":"codex"}}}}"#
+    )
+    .unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let new: Value = serde_json::from_str(line.trim()).unwrap();
+    // ProviderHandle attached → providerName is the stub identifier
+    assert_eq!(new["result"]["providerName"], "codex-stub");
+    assert_eq!(new["result"]["provider"], "codex");
+    assert_eq!(new["result"]["model"], "gpt-5.5");
+
+    drop(stdin);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&tmp_home);
+
+    // ── Case B: no auth configured → session/new still succeeds, but
+    // `providerName` is null. The placeholder handle can be inspected
+    // via session/auth, which will report configured=false with a hint.
+    let tmp_home_b = std::env::temp_dir().join(format!("mona-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp_home_b).unwrap();
+
+    let mut child_b = Command::new(&bin)
+        .env("MONA_ACP_LOG", "error")
+        .env("MONA_HOME", &tmp_home_b)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("MINIMAX_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mona-acp (unconfigured)");
+
+    let mut stdin_b = child_b.stdin.take().expect("stdin");
+    let stdout_b = child_b.stdout.take().expect("stdout");
+    let mut reader_b = std::io::BufReader::new(stdout_b);
+
+    writeln!(
+        stdin_b,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"session/new","params":{{"provider":"codex"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader_b.read_line(&mut line).unwrap();
+    let new_b: Value = serde_json::from_str(line.trim()).unwrap();
+    assert!(
+        new_b["result"].is_object(),
+        "expected result, got {new_b}"
+    );
+    let session_id_b = new_b["result"]["sessionId"].as_str().unwrap().to_string();
+    assert_eq!(new_b["result"]["providerName"], Value::Null);
+    assert_eq!(new_b["result"]["provider"], "codex");
+
+    // session/auth on the placeholder session reports configured=false
+    writeln!(
+        stdin_b,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"session/auth","params":{{"sessionId":"{session_id_b}"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader_b.read_line(&mut line).unwrap();
+    let auth_b: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(auth_b["result"]["configured"], false);
+    assert!(auth_b["result"]["hint"]
+        .as_str()
+        .unwrap()
+        .contains("~/.mona/codex.json"));
+
+    drop(stdin_b);
+    let _ = child_b.wait();
+    let _ = std::fs::remove_dir_all(&tmp_home_b);
+}

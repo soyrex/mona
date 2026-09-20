@@ -214,9 +214,9 @@ impl AuthRegistry {
         v
     }
 
-    /// Mutable accessor to the inner map. Used by tests; production code
-    /// should call `load()` instead.
-    #[cfg(test)]
+    /// Mutable accessor to the inner map. Used by `session.rs::new_session`
+    /// for tests, and by external integrations that want to inject auth
+    /// programmatically. Production code should call `load()` instead.
     pub fn inner_mut(&mut self) -> &mut std::collections::HashMap<SupportedProvider, Auth> {
         &mut self.inner
     }

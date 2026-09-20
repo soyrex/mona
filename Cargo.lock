@@ -3822,8 +3822,12 @@ name = "mona-acp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
+ "futures",
  "mona-jev",
+ "mona-message-types",
+ "mona-provider-core",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

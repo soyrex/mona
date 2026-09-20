@@ -347,6 +347,7 @@ mod tests {
             effort: "high".into(),
             working_dir: None,
             created_at: 0,
+            handle: None,
         }
     }
 
