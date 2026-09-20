@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The three providers Phase 2 supports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SupportedProvider {
     Codex,
     Claude,

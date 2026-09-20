@@ -359,3 +359,191 @@ fn sensitive_prompt_short_circuits_to_permission_required() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&tmp_home);
 }
+
+/// Phase 3: when no auth is configured, the initialize response lists an
+/// empty `configuredProviders` array, and `session/auth` reports
+/// `configured: false` with a hint pointing at the file/env path.
+#[test]
+fn auth_loader_reports_unconfigured_provider() {
+    let bin = mona_acp_bin();
+    if !bin.exists() {
+        eprintln!("skipping: {} not built yet", bin.display());
+        return;
+    }
+
+    let tmp_home = std::env::temp_dir().join(format!("mona-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp_home).unwrap();
+
+    let mut child = Command::new(&bin)
+        .env("MONA_ACP_LOG", "error")
+        .env("MONA_HOME", &tmp_home)
+        // Explicitly clear the env-var fallback paths so the test
+        // really exercises the "nothing configured" path.
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("MINIMAX_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mona-acp");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+
+    // initialize
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+    )
+    .unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let init: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(init["result"]["protocolVersion"], 1);
+    assert_eq!(
+        init["result"]["configuredProviders"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "no providers should be configured in a fresh home dir"
+    );
+
+    // session/new
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"session/new","params":{{"provider":"codex"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let new: Value = serde_json::from_str(line.trim()).unwrap();
+    let session_id = new["result"]["sessionId"].as_str().unwrap().to_string();
+
+    // session/auth
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":3,"method":"session/auth","params":{{"sessionId":"{session_id}"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let auth: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(auth["result"]["configured"], false);
+    assert_eq!(auth["result"]["summary"], Value::Null);
+    assert_eq!(auth["result"]["provider"], "codex");
+    assert!(auth["result"]["hint"]
+        .as_str()
+        .unwrap()
+        .contains("~/.mona/codex.json"));
+
+    drop(stdin);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&tmp_home);
+}
+
+/// Phase 3: when a codex.json file is present, the auth loader picks it up
+/// and `session/auth` reports the masked credential.
+#[test]
+fn auth_loader_picks_up_api_key_file() {
+    let bin = mona_acp_bin();
+    if !bin.exists() {
+        eprintln!("skipping: {} not built yet", bin.display());
+        return;
+    }
+
+    let tmp_home = std::env::temp_dir().join(format!("mona-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp_home).unwrap();
+    std::fs::write(
+        tmp_home.join("codex.json"),
+        r#"{"kind":"openai_api_key","api_key":"sk-test-1234567890abcdef"}"#,
+    )
+    .unwrap();
+
+    let mut child = Command::new(&bin)
+        .env("MONA_ACP_LOG", "error")
+        .env("MONA_HOME", &tmp_home)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("MINIMAX_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mona-acp");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+
+    // initialize — should now list codex as configured
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+    )
+    .unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let init: Value = serde_json::from_str(line.trim()).unwrap();
+    let configured: Vec<String> = init["result"]["configuredProviders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(configured, vec!["codex"]);
+
+    // session/new (codex)
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"session/new","params":{{"provider":"codex"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let new: Value = serde_json::from_str(line.trim()).unwrap();
+    let session_id = new["result"]["sessionId"].as_str().unwrap().to_string();
+
+    // session/auth — should report configured=true with masked summary
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":3,"method":"session/auth","params":{{"sessionId":"{session_id}"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let auth: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(auth["result"]["configured"], true);
+    let summary = auth["result"]["summary"].as_str().unwrap();
+    assert!(summary.contains("OpenAI API key"));
+    assert!(summary.contains("sk-t")); // head
+    assert!(summary.contains("cdef")); // tail
+
+    // session/auth on a session whose provider is NOT configured (claude)
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":4,"method":"session/new","params":{{"provider":"claude"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let new2: Value = serde_json::from_str(line.trim()).unwrap();
+    let claude_session_id = new2["result"]["sessionId"].as_str().unwrap().to_string();
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":5,"method":"session/auth","params":{{"sessionId":"{claude_session_id}"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let auth2: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(auth2["result"]["configured"], false);
+    assert_eq!(auth2["result"]["provider"], "claude");
+
+    drop(stdin);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&tmp_home);
+}

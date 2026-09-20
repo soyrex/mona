@@ -14,6 +14,7 @@
 //! `session/prompt` returns a stub response (Phase 2.5 wires the real
 //! `Agent::run_turn_with_jev` path).
 
+use crate::auth::{Auth, AuthRegistry};
 use crate::initialize::initialize_result;
 use crate::policy::JevRoutePolicy;
 use crate::provider_whitelist::parse_provider;
@@ -21,7 +22,7 @@ use crate::session::{SessionInfo, SessionRegistry};
 use crate::trace::TraceTrigger;
 use crate::turn::{RouterConfig, decision_to_router_trace_value, run_turn_with_jev};
 use anyhow::{Context, Result};
-use mona_jev::{JevClassifier, SafetyVerdict};
+use mona_jev::JevClassifier;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,6 +44,7 @@ pub struct ServerState {
     pub classifier: Arc<dyn JevClassifier>,
     pub router_config: Arc<RouterConfig>,
     pub home_dir: PathBuf,
+    pub auth: AuthRegistry,
     /// Per-session turn counter + swaps counter, kept here because the
     /// session registry is per-session and we'd otherwise lose the counts.
     pub session_counters: Arc<Mutex<SessionCounters>>,
@@ -70,6 +72,7 @@ impl SessionCounters {
 
 impl ServerState {
     pub fn new(home_dir: PathBuf, classifier: Arc<dyn JevClassifier>) -> Self {
+        let auth = AuthRegistry::load(&home_dir);
         Self {
             sessions: SessionRegistry::default(),
             policy: Arc::new(Mutex::new(JevRoutePolicy::SafeAuto)),
@@ -77,6 +80,7 @@ impl ServerState {
             classifier,
             router_config: Arc::new(RouterConfig::default()),
             home_dir,
+            auth,
             session_counters: Arc::new(Mutex::new(SessionCounters::default())),
         }
     }
@@ -143,11 +147,12 @@ pub async fn handle_frame(line: &str, state: &ServerState) -> Value {
 
     debug!(method = %method, "dispatching ACP frame");
     match method.as_str() {
-        "initialize" => handle_initialize(id, &params),
+        "initialize" => handle_initialize(id, &params, state),
         "session/new" => handle_session_new(id, &params, state).await,
         "session/list" => handle_session_list(id, state),
         "session/resume" => handle_session_resume(id, &params, state),
         "session/cancel" => handle_session_cancel(id, &params, state),
+        "session/auth" => handle_session_auth(id, &params, state),
         "session/prompt" => handle_session_prompt_stub(id, &params, state).await,
         "session/set_model" => handle_session_set_model(id, &params, state),
         "session/set_reasoning_effort" => handle_session_set_reasoning_effort(id, &params, state),
@@ -159,8 +164,8 @@ pub async fn handle_frame(line: &str, state: &ServerState) -> Value {
     }
 }
 
-fn handle_initialize(id: Value, _params: &Value) -> Value {
-    jsonrpc_result(id, initialize_result(SERVER_NAME, SERVER_VERSION))
+fn handle_initialize(id: Value, _params: &Value, state: &ServerState) -> Value {
+    jsonrpc_result(id, initialize_result(SERVER_NAME, SERVER_VERSION, &state.auth))
 }
 
 async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> Value {
@@ -249,6 +254,47 @@ fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -> Valu
     } else {
         warn!(session_id, "session/cancel for unknown session");
         jsonrpc_result(id, json!({ "cancelled": false }))
+    }
+}
+
+/// `session/auth` — report the auth state for a session's provider.
+///
+/// Returns `{ "configured": bool, "summary": <masked credential> | null,
+/// "phase": "3" }`. Useful for the Monitter UI to show a "Connect
+/// provider" affordance when the session's provider has no auth.
+fn handle_session_auth(id: Value, params: &Value, state: &ServerState) -> Value {
+    let session_id = match params.get("sessionId").and_then(Value::as_str) {
+        Some(s) => s,
+        None => return jsonrpc_error(id, -32602, "missing sessionId"),
+    };
+    let session = match state.sessions.get(session_id) {
+        Some(s) => s,
+        None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
+    };
+
+    match state.auth.get(session.provider) {
+        Some(auth) => jsonrpc_result(
+            id,
+            json!({
+                "configured": true,
+                "summary": auth.masked_summary(),
+                "provider": session.provider.as_str(),
+                "phase": "3"
+            }),
+        ),
+        None => jsonrpc_result(
+            id,
+            json!({
+                "configured": false,
+                "summary": null,
+                "provider": session.provider.as_str(),
+                "phase": "3",
+                "hint": format!(
+                    "place credentials at ~/.mona/{}.json or set the matching env var",
+                    session.provider.as_str()
+                )
+            }),
+        ),
     }
 }
 
