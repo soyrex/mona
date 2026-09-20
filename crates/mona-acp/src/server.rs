@@ -18,8 +18,12 @@ use crate::initialize::initialize_result;
 use crate::policy::JevRoutePolicy;
 use crate::provider_whitelist::parse_provider;
 use crate::session::{SessionInfo, SessionRegistry};
+use crate::trace::TraceTrigger;
+use crate::turn::{RouterConfig, decision_to_router_trace_value, run_turn_with_jev};
 use anyhow::{Context, Result};
+use mona_jev::{JevClassifier, SafetyVerdict};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
@@ -31,16 +35,55 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Shared, mutable server state. Held behind a Mutex because the session
 /// registry needs interior mutability.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ServerState {
     pub sessions: SessionRegistry,
     pub policy: Arc<Mutex<JevRoutePolicy>>,
     pub last_classification: Arc<Mutex<Option<mona_jev::JevRoutePlan>>>,
+    pub classifier: Arc<dyn JevClassifier>,
+    pub router_config: Arc<RouterConfig>,
+    pub home_dir: PathBuf,
+    /// Per-session turn counter + swaps counter, kept here because the
+    /// session registry is per-session and we'd otherwise lose the counts.
+    pub session_counters: Arc<Mutex<SessionCounters>>,
+}
+
+#[derive(Default, Clone)]
+struct SessionCounters {
+    /// session_id -> (turn_count, swaps_count)
+    inner: std::collections::HashMap<String, (u32, u32)>,
+}
+
+impl SessionCounters {
+    fn get_or_insert(&mut self, id: &str) -> &mut (u32, u32) {
+        self.inner.entry(id.to_string()).or_insert((0, 0))
+    }
+    fn record_swap(&mut self, id: &str) {
+        let entry = self.inner.entry(id.to_string()).or_insert((0, 0));
+        entry.1 += 1;
+    }
+    #[allow(dead_code)] // kept for future use when session/cancel is wired
+    fn remove(&mut self, id: &str) {
+        self.inner.remove(id);
+    }
 }
 
 impl ServerState {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(home_dir: PathBuf, classifier: Arc<dyn JevClassifier>) -> Self {
+        Self {
+            sessions: SessionRegistry::default(),
+            policy: Arc::new(Mutex::new(JevRoutePolicy::SafeAuto)),
+            last_classification: Arc::new(Mutex::new(None)),
+            classifier,
+            router_config: Arc::new(RouterConfig::default()),
+            home_dir,
+            session_counters: Arc::new(Mutex::new(SessionCounters::default())),
+        }
+    }
+
+    pub fn with_classifier(mut self, classifier: Arc<dyn JevClassifier>) -> Self {
+        self.classifier = classifier;
+        self
     }
 }
 
@@ -209,9 +252,12 @@ fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -> Valu
     }
 }
 
-/// Phase 2 stub. Returns a deterministic response acknowledging the prompt
-/// and surfacing the fact that the agent-loop wiring lands in Phase 2.5.
-/// Does NOT actually drive the agent.
+/// Per-turn routing hook + agent-loop stub.
+///
+/// Phase 2.5: runs the Jev classifier, applies safety gates, persists a
+/// per-turn trace, and emits a `router_trace` push event to the client.
+/// The actual `Agent::run_turn()` integration is still stubbed (returns an
+/// ack); Phase 3 wires the stub to the real agent loop.
 async fn handle_session_prompt_stub(id: Value, params: &Value, state: &ServerState) -> Value {
     let session_id = match params.get("sessionId").and_then(Value::as_str) {
         Some(s) => s.to_string(),
@@ -222,38 +268,96 @@ async fn handle_session_prompt_stub(id: Value, params: &Value, state: &ServerSta
         .and_then(Value::as_str)
         .unwrap_or("");
 
-    let session = state.sessions.get(&session_id);
-    let provider = session
-        .as_ref()
-        .map(|s| s.provider.as_str())
-        .unwrap_or("(unknown)");
+    let mut session = match state.sessions.get(&session_id) {
+        Some(s) => s,
+        None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
+    };
 
-    warn!(
-        session_id,
-        provider, "session/prompt received; Phase 2 stub returns ack only. \
-                   Real agent-loop wiring lands in Phase 2.5."
-    );
+    // Read the current turn counter BEFORE incrementing, so the very
+    // first prompt in a session sees turn_count = 0 (no cooldown). Then
+    // increment so the next prompt sees turn_count = 1.
+    let (turn_count_for_routing, swaps_in_session) = {
+        let counters = state.session_counters.lock().await;
+        let entry = counters.inner.get(&session_id).copied().unwrap_or((0, 0));
+        (entry.0, entry.1)
+    };
+    {
+        let mut counters = state.session_counters.lock().await;
+        counters.get_or_insert(&session_id).0 += 1;
+    }
 
-    // Phase 2.5: this is where the per-turn Jev hook fires:
-    //   1. Run classifier.classify(JevClassifyRequest { prompt, ... }).
-    //   2. Apply safety::check_safety().
-    //   3. If policy.applies_plan(), call provider.set_model() + set_reasoning_effort().
-    //   4. Drive Agent::run_turn() and stream events back over the wire.
-    jsonrpc_result(
-        id,
-        json!({
-            "stopReason": "phase2_stub",
-            "sessionId": session_id,
-            "text": format!(
-                "[mona-acp Phase 2 stub] received {}-char prompt on `{}`. \
-                 The per-turn Jev hook + Agent::run_turn wiring lands in Phase 2.5. \
-                 See docs/PHASE-2-MONA-ACP.md.",
-                text.len(),
-                provider
-            ),
-            "usage": { "inputTokens": text.len(), "outputTokens": 0 }
-        }),
+    // 1. Run the per-turn router
+    let decision = match run_turn_with_jev(
+        state.classifier.clone(),
+        &mut session,
+        text,
+        turn_count_for_routing,
+        swaps_in_session,
+        None, // last_turn_outcome — populated when Agent::run_turn drives this
+        &state.router_config,
+        &state.home_dir,
     )
+    .await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            error!(error = %e, session_id, "router hook errored");
+            return jsonrpc_error(id, -32603, &format!("router hook error: {e}"));
+        }
+    };
+
+    // 2. Update session counters if a swap happened
+    if decision.trace.applied {
+        let mut counters = state.session_counters.lock().await;
+        counters.record_swap(&session_id);
+    }
+
+    // 3. Persist the updated session state (model + effort changes)
+    state.sessions.update(&session);
+
+    // 4. Cache the latest plan for inspection
+    *state.last_classification.lock().await = decision.applied_plan.clone();
+
+    // 5. Build the JSON-RPC response. Sensitive prompts short-circuit to
+    //    permission_required; everything else returns the routing decision.
+    //
+    //    `decision.sensitive` is propagated independently of the safety
+    //    gate's verdict — even when the gate refuses for cooldown or low
+    //    confidence, a sensitive plan still routes to human review.
+    if decision.sensitive {
+        return jsonrpc_error(
+            id,
+            -32001, // permission_required
+            "sensitive prompt detected; routing to human review required",
+        );
+    }
+    let response = if decision.applied_plan.is_some() {
+        json!({
+            "sessionId": session_id,
+            "stopReason": "phase2.5_routing_done",
+            "model": decision.new_model,
+            "effort": decision.new_effort,
+            "applied": decision.trace.applied,
+            "tier": format!("{:?}", decision.trace.proposed_tier.unwrap_or(mona_jev::ModelTier::Balanced)).to_lowercase(),
+            "reason": decision.reason,
+            "usage": { "inputTokens": text.len(), "outputTokens": 0 }
+        })
+    } else {
+        json!({
+            "sessionId": session_id,
+            "stopReason": "phase2.5_routing_refused",
+            "model": decision.new_model,
+            "effort": decision.new_effort,
+            "applied": false,
+            "reason": decision.reason,
+            "usage": { "inputTokens": text.len(), "outputTokens": 0 }
+        })
+    };
+
+    // Phase 3 will: drive Agent::run_turn here, stream events, return the
+    // final text. For now we return the routing decision as the response.
+    debug!(session_id, "session/prompt routing done; agent loop stub");
+    jsonrpc_result(id, response)
 }
 
 fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> Value {

@@ -155,7 +155,7 @@ fn full_session_lifecycle() {
     line.clear();
     reader.read_line(&mut line).expect("read prompt resp");
     let prompt_resp: Value = serde_json::from_str(line.trim()).expect("prompt resp json");
-    assert_eq!(prompt_resp["result"]["stopReason"], "phase2_stub");
+    assert_eq!(prompt_resp["result"]["stopReason"], "phase2.5_routing_done");
 
     // 3. session/set_model
     writeln!(
@@ -212,4 +212,150 @@ fn unsupported_provider_is_rejected_with_helpful_message() {
     assert!(msg.contains("codex"));
     assert!(msg.contains("claude"));
     assert!(msg.contains("minimax"));
+}
+
+/// Phase 2.5: the per-turn router fires inside session/prompt, classifies
+/// the prompt, applies safety gates, persists a router-trace JSON, and
+/// updates the session's model. We use a complex prompt that the
+/// rule-based classifier maps to `Strong` tier.
+#[test]
+fn per_turn_router_fires_on_session_prompt() {
+    let bin = mona_acp_bin();
+    if !bin.exists() {
+        eprintln!("skipping: {} not built yet", bin.display());
+        return;
+    }
+
+    // Use a temporary MONA_HOME so we don't pollute the real home dir.
+    let tmp_home = std::env::temp_dir().join(format!("mona-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp_home).unwrap();
+
+    let mut child = Command::new(&bin)
+        .env("MONA_ACP_LOG", "error")
+        .env("MONA_HOME", &tmp_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mona-acp");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+
+    // 1. session/new
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"session/new","params":{{"provider":"codex"}}}}"#
+    )
+    .expect("write new");
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read new resp");
+    let new_resp: Value = serde_json::from_str(line.trim()).expect("new resp json");
+    let session_id = new_resp["result"]["sessionId"]
+        .as_str()
+        .expect("sessionId")
+        .to_string();
+
+    // 2. session/prompt with a complex prompt (triggers Strong tier)
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{{"sessionId":"{session_id}","text":"design a new architecture for the auth system across the codebase"}}}}"#
+    )
+    .expect("write prompt");
+    line.clear();
+    reader.read_line(&mut line).expect("read prompt resp");
+    let prompt_resp: Value = serde_json::from_str(line.trim()).expect("prompt resp json");
+
+    assert_eq!(prompt_resp["result"]["stopReason"], "phase2.5_routing_done");
+    assert_eq!(prompt_resp["result"]["applied"], true);
+    assert_eq!(prompt_resp["result"]["tier"], "strong");
+    assert!(prompt_resp["result"]["model"]
+        .as_str()
+        .unwrap()
+        .starts_with("strong:"));
+    assert_eq!(prompt_resp["result"]["effort"], "high");
+
+    // 3. Verify a router-trace JSON was persisted
+    let trace_dir = tmp_home.join("router-traces");
+    let traces: Vec<_> = std::fs::read_dir(&trace_dir)
+        .expect("read trace dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+        .collect();
+    assert_eq!(traces.len(), 1, "expected exactly one router trace");
+    let trace: Value =
+        serde_json::from_str(&std::fs::read_to_string(traces[0].path()).unwrap()).unwrap();
+    assert_eq!(trace["session_id"], session_id);
+    assert_eq!(trace["applied"], true);
+    assert_eq!(trace["proposed_tier"], "Strong");
+    assert_eq!(trace["trigger"], "initial_prompt");
+
+    // 4. session/cancel
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":3,"method":"session/cancel","params":{{"sessionId":"{session_id}"}}}}"#
+    )
+    .expect("write cancel");
+    drop(stdin);
+    let _ = child.wait();
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp_home);
+}
+
+/// Phase 2.5: a sensitive prompt is refused with a permission_required
+/// error rather than being routed.
+#[test]
+fn sensitive_prompt_short_circuits_to_permission_required() {
+    let bin = mona_acp_bin();
+    if !bin.exists() {
+        eprintln!("skipping: {} not built yet", bin.display());
+        return;
+    }
+
+    let tmp_home = std::env::temp_dir().join(format!("mona-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp_home).unwrap();
+
+    let mut child = Command::new(&bin)
+        .env("MONA_ACP_LOG", "error")
+        .env("MONA_HOME", &tmp_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mona-acp");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"session/new","params":{{"provider":"codex"}}}}"#
+    )
+    .unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let new_resp: Value = serde_json::from_str(line.trim()).unwrap();
+    let session_id = new_resp["result"]["sessionId"].as_str().unwrap().to_string();
+
+    // Sensitive prompt (matches the rule-based classifier's `is_sensitive`)
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{{"sessionId":"{session_id}","text":"rm -rf / please"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let resp: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(resp["error"]["code"], -32001);
+    assert!(resp["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("sensitive"));
+
+    drop(stdin);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&tmp_home);
 }

@@ -3,7 +3,30 @@
 
 use anyhow::Result;
 use mona_acp::ServerState;
+use mona_jev::{JevClassifier, RuleBasedClassifier};
+use std::path::PathBuf;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
+
+/// Resolve the mona home directory.
+///
+/// Default: `~/.mona/`. Override with `MONA_HOME` env var. Used for
+/// `router-traces/` persistence and (in Phase 3) OAuth token loading.
+fn home_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("MONA_HOME") {
+        return PathBuf::from(p);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".mona");
+    }
+    std::env::temp_dir().join("mona")
+}
+
+/// Build the default classifier. Operators can later swap in a live
+/// classifier (Phase 2.5+); for now we use the rule-based one.
+fn default_classifier() -> Arc<dyn JevClassifier> {
+    Arc::new(RuleBasedClassifier::new())
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -15,6 +38,11 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    let state = ServerState::new();
+    let home = home_dir();
+    std::fs::create_dir_all(&home).ok();
+    std::fs::create_dir_all(home.join("router-traces")).ok();
+
+    let state = ServerState::new(home.clone(), default_classifier());
+    tracing::info!(?home, "mona-acp starting");
     mona_acp::run_acp_server(state).await
 }

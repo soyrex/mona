@@ -70,6 +70,20 @@ impl SessionRegistry {
         self.inner.lock().unwrap().remove(id).is_some()
     }
 
+    /// Update the model + effort for an existing session. Phase 2.5 calls
+    /// this after the per-turn router decides on a new model.
+    pub fn update(&self, session: &Session) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(existing) = inner.get_mut(&session.id) {
+            existing.model = session.model.clone();
+            existing.effort = session.effort.clone();
+            existing.working_dir = session.working_dir.clone();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn list(&self) -> Vec<Session> {
         self.inner.lock().unwrap().values().cloned().collect()
     }

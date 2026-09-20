@@ -20,8 +20,12 @@ pub mod policy;
 pub mod provider_whitelist;
 pub mod server;
 pub mod session;
+pub mod trace;
+pub mod turn;
 
 pub use initialize::initialize_result;
 pub use policy::JevRoutePolicy;
 pub use provider_whitelist::{SupportedProvider, parse_provider};
 pub use server::{run_acp_server, ServerState};
+pub use trace::{RouterTrace, TraceTrigger};
+pub use turn::{RouterConfig, TurnRoutingDecision, run_turn_with_jev};
