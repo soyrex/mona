@@ -3771,6 +3771,7 @@ dependencies = [
  "mona-build-meta",
  "mona-harness-api",
  "mona-harness-api-server",
+ "mona-jev",
  "mona-provider-anthropic-runtime",
  "mona-provider-antigravity-runtime",
  "mona-provider-claude-cli-runtime",
@@ -4108,6 +4109,19 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+]
+
+[[package]]
+name = "mona-jev"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -8578,6 +8592,7 @@ dependencies = [
  "atomic",
  "getrandom 0.4.1",
  "js-sys",
+ "serde_core",
  "sha1_smol",
  "wasm-bindgen",
 ]

@@ -1,0 +1,21 @@
+[package]
+name = "mona-jev"
+version = "0.1.0"
+edition = "2024"
+description = "Jev classifier for mona: per-turn model + reasoning-effort routing decisions. Monitter-owned; not from upstream jcode."
+publish = false
+
+[lib]
+name = "mona_jev"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
