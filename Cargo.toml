@@ -40,6 +40,7 @@ members = [
     "crates/mona-protocol",
     "crates/mona-selfdev-types",
     "crates/mona-jev",
+    "crates/mona-acp",
     "crates/mona-session-types",
     "crates/mona-setup-hints",
     "crates/mona-storage",
@@ -204,6 +205,7 @@ mona-provider-openai-runtime = { path = "crates/mona-provider-openai-runtime" }
 mona-provider-grok-build-runtime = { path = "crates/mona-provider-grok-build-runtime" }
 mona-selfdev-types = { path = "crates/mona-selfdev-types" }
 mona-jev = { path = "crates/mona-jev" }
+mona-acp = { path = "crates/mona-acp" }
 
 # Archive extraction (for auto-update)
 tempfile = "3"
