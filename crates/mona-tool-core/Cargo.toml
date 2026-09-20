@@ -1,0 +1,17 @@
+[package]
+name = "mona-tool-core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "mona_tool_core"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+mona-agent-runtime = { path = "../mona-agent-runtime" }
+mona-message-types = { path = "../mona-message-types" }
+mona-tool-types = { path = "../mona-tool-types" }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }

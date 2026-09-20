@@ -31,7 +31,7 @@ scripts/run_openrelay_discovery_test.sh
 The runner:
 
 1. starts the fixture on a random loopback port;
-2. creates a disposable `JCODE_HOME` with the fixture endpoint;
+2. creates a disposable `MONA_HOME` with the fixture endpoint;
 3. copies only local provider-auth state needed for the test;
 4. verifies the real read-only endpoint returns Ethereum Classic chain ID `61`;
 5. exposes only `bash` and `discover_tools` to the agent;

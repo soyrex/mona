@@ -20,7 +20,7 @@ edits add nothing. If a multi-file tool partially succeeds and later fails,
 mutations already performed still count. Ordinary moves count content changes
 rather than treating an unchanged file as deleted and recreated.
 
-Small counters live at `$JCODE_HOME/sessions/edit-stats/<session-id>.json`
+Small counters live at `$MONA_HOME/sessions/edit-stats/<session-id>.json`
 (default `~/.jcode`). A per-session OS file lock serializes concurrent updates,
 and atomic replacement prevents readers from observing partial JSON. Counters
 survive transcript compaction and are separate for agents sharing a worktree.

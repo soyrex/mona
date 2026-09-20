@@ -14,7 +14,7 @@ not claim that the earlier LinkedIn research or Amazon cart tasks were completed
 Final coordinated command:
 
 ```sh
-cargo test -p jcode-app-core --lib browser -- --nocapture
+cargo test -p mona-app-core --lib browser -- --nocapture
 BROWSER_SESSION=<existing-session> python3 scripts/test_browser_handoff_live.py --tab-id <disposable-tab>
 ```
 
@@ -27,13 +27,13 @@ Observed run `2059807twx`, exit 0 at 09:40:32 UTC:
 - The subscription-only smoke case was not run. Live decisions used OpenRouter.
 - Earlier complete rerun `163628unon` also passed all five live cases.
 
-Local full logs: `/tmp/jcode-bg-tasks/2059807twx.output` and
-`/tmp/jcode-bg-tasks/163628unon.output`. These are ephemeral, not repository artifacts.
+Local full logs: `/tmp/mona-bg-tasks/2059807twx.output` and
+`/tmp/mona-bg-tasks/163628unon.output`. These are ephemeral, not repository artifacts.
 The concrete outcomes and named assertions below are the durable evidence summary.
 
 ## Explicit requirements mapped to observations
 
-Test names below are in `crates/jcode-app-core/src/tool/`.
+Test names below are in `crates/mona-app-core/src/tool/`.
 
 | Requirement | Concrete check | Observed result |
 | --- | --- | --- |

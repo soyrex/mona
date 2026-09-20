@@ -3,7 +3,7 @@ use crate::test_support::*;
 /// Test ambient state: load, save, record_cycle
 #[test]
 fn test_ambient_state_lifecycle() {
-    use jcode::ambient::{AmbientCycleResult, AmbientState, AmbientStatus, CycleStatus};
+    use mona::ambient::{AmbientCycleResult, AmbientState, AmbientStatus, CycleStatus};
 
     let mut state = AmbientState::default();
     assert!(matches!(state.status, AmbientStatus::Idle));
@@ -36,9 +36,9 @@ fn test_ambient_state_lifecycle() {
 /// Test ambient scheduled queue: push, pop, priority ordering
 #[test]
 fn test_ambient_scheduled_queue() {
-    use jcode::ambient::{Priority, ScheduledItem, ScheduledQueue};
+    use mona::ambient::{Priority, ScheduledItem, ScheduledQueue};
 
-    let tmp = std::env::temp_dir().join("jcode-test-queue.json");
+    let tmp = std::env::temp_dir().join("mona-test-queue.json");
     let _ = std::fs::remove_file(&tmp); // Clean up from previous runs
     let mut queue = ScheduledQueue::load(tmp);
     assert!(queue.is_empty());
@@ -50,7 +50,7 @@ fn test_ambient_scheduled_queue() {
         scheduled_for: now - chrono::Duration::minutes(5),
         context: "low priority task".to_string(),
         priority: Priority::Low,
-        target: jcode::ambient::ScheduleTarget::Ambient,
+        target: mona::ambient::ScheduleTarget::Ambient,
         created_by_session: "test".to_string(),
         created_at: now,
         working_dir: None,
@@ -65,7 +65,7 @@ fn test_ambient_scheduled_queue() {
         scheduled_for: now - chrono::Duration::minutes(5),
         context: "high priority task".to_string(),
         priority: Priority::High,
-        target: jcode::ambient::ScheduleTarget::Ambient,
+        target: mona::ambient::ScheduleTarget::Ambient,
         created_by_session: "test".to_string(),
         created_at: now,
         working_dir: None,
@@ -80,7 +80,7 @@ fn test_ambient_scheduled_queue() {
         scheduled_for: now + chrono::Duration::hours(1),
         context: "future task".to_string(),
         priority: Priority::Normal,
-        target: jcode::ambient::ScheduleTarget::Ambient,
+        target: mona::ambient::ScheduleTarget::Ambient,
         created_by_session: "test".to_string(),
         created_at: now,
         working_dir: None,
@@ -106,7 +106,7 @@ fn test_ambient_scheduled_queue() {
 /// Test adaptive scheduler: interval calculation
 #[test]
 fn test_adaptive_scheduler_intervals() {
-    use jcode::ambient_scheduler::{AdaptiveScheduler, AmbientSchedulerConfig};
+    use mona::ambient_scheduler::{AdaptiveScheduler, AmbientSchedulerConfig};
 
     let config = AmbientSchedulerConfig {
         min_interval_minutes: 5,
@@ -124,7 +124,7 @@ fn test_adaptive_scheduler_intervals() {
 /// Test adaptive scheduler: backoff on rate limit
 #[test]
 fn test_adaptive_scheduler_backoff() {
-    use jcode::ambient_scheduler::{AdaptiveScheduler, AmbientSchedulerConfig};
+    use mona::ambient_scheduler::{AdaptiveScheduler, AmbientSchedulerConfig};
 
     let config = AmbientSchedulerConfig {
         min_interval_minutes: 5,
@@ -150,7 +150,7 @@ fn test_adaptive_scheduler_backoff() {
 /// Test adaptive scheduler: pause on active session
 #[test]
 fn test_adaptive_scheduler_pause() {
-    use jcode::ambient_scheduler::{AdaptiveScheduler, AmbientSchedulerConfig};
+    use mona::ambient_scheduler::{AdaptiveScheduler, AmbientSchedulerConfig};
 
     let config = AmbientSchedulerConfig {
         min_interval_minutes: 5,
@@ -202,7 +202,7 @@ async fn test_ambient_end_cycle_tool() -> Result<()> {
         },
     ]);
 
-    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let provider: Arc<dyn mona::provider::Provider> = Arc::new(provider);
     let registry = Registry::new(provider.clone()).await;
     registry.register_ambient_tools().await;
 
@@ -212,7 +212,7 @@ async fn test_ambient_end_cycle_tool() -> Result<()> {
     assert_eq!(response, "Cycle complete.");
 
     // The tool should have stored a cycle result
-    let result = jcode::tool::ambient::take_cycle_result();
+    let result = mona::tool::ambient::take_cycle_result();
     assert!(result.is_some());
     let result = result.unwrap();
     assert_eq!(
@@ -260,16 +260,16 @@ async fn test_ambient_request_permission_tool() -> Result<()> {
         },
     ]);
 
-    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let provider: Arc<dyn mona::provider::Provider> = Arc::new(provider);
     let registry = Registry::new(provider.clone()).await;
     registry.register_ambient_tools().await;
 
     let mut agent = Agent::new(provider, registry);
     let ambient_session_id = agent.session_id().to_string();
-    jcode::tool::ambient::register_ambient_session(ambient_session_id.clone());
+    mona::tool::ambient::register_ambient_session(ambient_session_id.clone());
 
     let response = agent.run_once_capture("Request permission").await?;
-    jcode::tool::ambient::unregister_ambient_session(&ambient_session_id);
+    mona::tool::ambient::unregister_ambient_session(&ambient_session_id);
     assert_eq!(response, "Permission requested.");
 
     Ok(())
@@ -308,7 +308,7 @@ async fn test_ambient_schedule_tool() -> Result<()> {
         },
     ]);
 
-    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let provider: Arc<dyn mona::provider::Provider> = Arc::new(provider);
     let registry = Registry::new(provider.clone()).await;
     registry.register_ambient_tools().await;
 
@@ -323,7 +323,7 @@ async fn test_ambient_schedule_tool() -> Result<()> {
 /// Test ambient system prompt builder
 #[test]
 fn test_ambient_system_prompt_builder() {
-    use jcode::ambient::{
+    use mona::ambient::{
         AmbientState, MemoryGraphHealth, ResourceBudget, build_ambient_system_prompt,
     };
 
@@ -385,8 +385,8 @@ fn test_ambient_system_prompt_builder() {
 /// Test ambient runner handle: status_json
 #[tokio::test]
 async fn test_ambient_runner_status() {
-    use jcode::ambient_runner::AmbientRunnerHandle;
-    use jcode::safety::SafetySystem;
+    use mona::ambient_runner::AmbientRunnerHandle;
+    use mona::safety::SafetySystem;
 
     let safety = Arc::new(SafetySystem::new());
     let handle = AmbientRunnerHandle::new(safety);
@@ -425,9 +425,9 @@ async fn test_ambient_runner_status() {
 /// Test ambient runner handle: trigger and stop
 #[tokio::test]
 async fn test_ambient_runner_trigger_and_stop() {
-    use jcode::ambient::AmbientStatus;
-    use jcode::ambient_runner::AmbientRunnerHandle;
-    use jcode::safety::SafetySystem;
+    use mona::ambient::AmbientStatus;
+    use mona::ambient_runner::AmbientRunnerHandle;
+    use mona::safety::SafetySystem;
 
     let safety = Arc::new(SafetySystem::new());
     let handle = AmbientRunnerHandle::new(safety);
@@ -448,8 +448,8 @@ async fn test_ambient_runner_trigger_and_stop() {
 /// Test ambient runner handle: queue_json
 #[tokio::test]
 async fn test_ambient_runner_queue_json() {
-    use jcode::ambient_runner::AmbientRunnerHandle;
-    use jcode::safety::SafetySystem;
+    use mona::ambient_runner::AmbientRunnerHandle;
+    use mona::safety::SafetySystem;
 
     let safety = Arc::new(SafetySystem::new());
     let handle = AmbientRunnerHandle::new(safety);
@@ -462,8 +462,8 @@ async fn test_ambient_runner_queue_json() {
 /// Test ambient runner handle: log_json
 #[tokio::test]
 async fn test_ambient_runner_log_json() {
-    use jcode::ambient_runner::AmbientRunnerHandle;
-    use jcode::safety::SafetySystem;
+    use mona::ambient_runner::AmbientRunnerHandle;
+    use mona::safety::SafetySystem;
 
     let safety = Arc::new(SafetySystem::new());
     let handle = AmbientRunnerHandle::new(safety);
@@ -476,7 +476,7 @@ async fn test_ambient_runner_log_json() {
 /// Test memory reinforcement provenance
 #[test]
 fn test_memory_reinforcement_provenance() {
-    use jcode::memory::{MemoryCategory, MemoryEntry};
+    use mona::memory::{MemoryCategory, MemoryEntry};
 
     let mut entry = MemoryEntry::new(MemoryCategory::Preference, "User prefers dark mode");
     assert!(entry.reinforcements.is_empty());
@@ -500,7 +500,7 @@ fn test_memory_reinforcement_provenance() {
 /// Test ambient config defaults
 #[test]
 fn test_ambient_config_defaults() {
-    use jcode::config::AmbientConfig;
+    use mona::config::AmbientConfig;
 
     let config = AmbientConfig::default();
     assert!(!config.enabled);
@@ -518,8 +518,8 @@ fn test_ambient_config_defaults() {
 /// Test ambient lock acquisition and release
 #[test]
 fn test_ambient_lock() {
-    use jcode::ambient::AmbientLock;
-    let _env = setup_test_env().expect("failed to setup isolated JCODE_HOME");
+    use mona::ambient::AmbientLock;
+    let _env = setup_test_env().expect("failed to setup isolated MONA_HOME");
 
     // First acquisition should succeed
     let lock1 = AmbientLock::try_acquire();
@@ -584,7 +584,7 @@ async fn test_full_ambient_cycle_simulation() -> Result<()> {
         },
     ]);
 
-    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let provider: Arc<dyn mona::provider::Provider> = Arc::new(provider);
     let registry = Registry::new(provider.clone()).await;
     registry.register_ambient_tools().await;
 
@@ -596,7 +596,7 @@ async fn test_full_ambient_cycle_simulation() -> Result<()> {
     assert!(response.contains("Ambient cycle completed"));
 
     // Verify end_ambient_cycle stored the result
-    let result = jcode::tool::ambient::take_cycle_result();
+    let result = mona::tool::ambient::take_cycle_result();
     assert!(result.is_some());
     let result = result.unwrap();
     assert_eq!(result.memories_modified, 6);

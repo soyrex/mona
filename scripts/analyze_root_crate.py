@@ -4,7 +4,7 @@
 For every top-level module under src/ (a `foo.rs` file or a `foo/` dir) it
 computes:
   - loc: total lines of Rust (incl. submodules for dir modules)
-  - facade: whether it is already just `pub use jcode_*::*;`
+  - facade: whether it is already just `pub use mona_*::*;`
   - inbound: how many *other* top-level modules reference `crate::<mod>`
   - outbound: which other in-root (non-facade) modules it references
 
@@ -25,7 +25,7 @@ SRC = os.path.join(os.path.dirname(__file__), "..", "src")
 SRC = os.path.normpath(SRC)
 
 CRATE_RE = re.compile(r"\bcrate::([a-z_][a-z0-9_]*)")
-FACADE_RE = re.compile(r"pub use jcode_[a-z0-9_]+::")
+FACADE_RE = re.compile(r"pub use mona_[a-z0-9_]+::")
 # `use crate::...;` statement body (may span lines); group 1 is everything
 # between `crate::` and the terminating `;`.
 USE_CRATE_RE = re.compile(r"\buse\s+crate::([^;]*);", re.DOTALL)

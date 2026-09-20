@@ -52,10 +52,10 @@ class DiscordReleaseTests(unittest.TestCase):
 
 Fast startup.
 
-<!-- jcode-platform-availability:start -->
+<!-- mona-platform-availability:start -->
 ## Platform availability
 - Linux: available
-<!-- jcode-platform-availability:end -->
+<!-- mona-platform-availability:end -->
 """
         message = MODULE.format_message(
             tag="v0.52.0",
@@ -74,7 +74,7 @@ Fast startup.
         self.assertTrue(message.endswith(f"… (full notes: <{url}>)"))
 
     def test_marker_is_tag_specific(self) -> None:
-        body = "notes\n\n<!-- jcode-discord-announced:v0.52.0 -->\n"
+        body = "notes\n\n<!-- mona-discord-announced:v0.52.0 -->\n"
         self.assertTrue(MODULE.already_announced(body, "v0.52.0"))
         self.assertFalse(MODULE.already_announced(body, "v0.53.0"))
 
@@ -123,7 +123,7 @@ Fast startup.
         release = {
             "id": 52,
             "name": "v0.52.0",
-            "body": "notes\n<!-- jcode-discord-announced:v0.52.0 -->",
+            "body": "notes\n<!-- mona-discord-announced:v0.52.0 -->",
             "html_url": "https://example.test/v0.52.0",
             "draft": False,
         }

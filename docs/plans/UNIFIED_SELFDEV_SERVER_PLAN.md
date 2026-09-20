@@ -5,8 +5,8 @@
 > This document is preserved as a historical design/rollout plan. The current
 > architecture uses a single shared server, with self-dev handled as a
 > session-local canary capability rather than a separate dedicated daemon/socket.
-> Any references below to `/tmp/jcode-selfdev.sock`, `canary-wrapper`, or
-> `JCODE_SELFDEV_MODE` describe the pre-merge architecture or transition steps,
+> Any references below to `/tmp/mona-selfdev.sock`, `canary-wrapper`, or
+> `MONA_SELFDEV_MODE` describe the pre-merge architecture or transition steps,
 > not the current runtime design.
 
 ## Goal
@@ -26,12 +26,12 @@ Today, normal sessions and self-dev sessions can end up with separate long-lived
 
 ### Normal mode
 - Main socket: runtime `jcode.sock`
-- Debug socket: runtime `jcode-debug.sock`
+- Debug socket: runtime `mona-debug.sock`
 - Startup path: `jcode` -> default client flow -> spawn `jcode serve` if needed
 
 ### Self-dev mode
-- Main socket: `/tmp/jcode-selfdev.sock`
-- Debug socket: `/tmp/jcode-selfdev-debug.sock`
+- Main socket: `/tmp/mona-selfdev.sock`
+- Debug socket: `/tmp/mona-selfdev-debug.sock`
 - Startup path:
   - repo auto-detection or `jcode self-dev`
   - `cli/selfdev.rs::run_self_dev()`
@@ -55,7 +55,7 @@ This means the main remaining split is not the session model, but the **startup 
 
 ### One shared server
 - Main socket: runtime `jcode.sock`
-- Debug socket: runtime `jcode-debug.sock`
+- Debug socket: runtime `mona-debug.sock`
 - Self-dev sessions connect to the same server as normal sessions
 
 ### Self-dev becomes session-local
@@ -139,7 +139,7 @@ Expected result:
 **Goal:** fully retire the separate socket model.
 
 Changes:
-- deprecate `/tmp/jcode-selfdev.sock` and `/tmp/jcode-selfdev-debug.sock`
+- deprecate `/tmp/mona-selfdev.sock` and `/tmp/mona-selfdev-debug.sock`
 - update docs, tests, and scripts that probe self-dev via separate sockets
 - simplify debug/test tooling to use the shared debug socket
 
@@ -153,7 +153,7 @@ This is the main behavior change and the key tradeoff for RAM savings.
 Some scripts and tests currently prefer the self-dev debug socket path and will need updating.
 
 ### Scattered env-based logic
-There are multiple `JCODE_SELFDEV_MODE` checks across startup, hot reload, and server behavior; these need to be separated into:
+There are multiple `MONA_SELFDEV_MODE` checks across startup, hot reload, and server behavior; these need to be separated into:
 - client self-dev request
 - server self-dev mode (legacy / compatibility)
 - session canary capability

@@ -5,9 +5,9 @@ Audit self-dev reload recovery handoffs.
 This is a read-only diagnostic helper for bugs where `selfdev reload` restarts the
 server but not every interrupted session continues. It correlates three sources:
 
-  1. ~/.jcode/reload-recovery/*.json durable recovery intent records
-  2. ~/.jcode/logs/jcode-*.log recovery lifecycle messages
-  3. ~/.jcode/sessions/<session>.json coarse transcript markers
+  1. ~/.mona/reload-recovery/*.json durable recovery intent records
+  2. ~/.mona/logs/mona-*.log recovery lifecycle messages
+  3. ~/.mona/sessions/<session>.json coarse transcript markers
 
 The important invariant this helps check is:
 
@@ -188,12 +188,12 @@ class IntentRecord:
         return data
 
 
-def jcode_home() -> pathlib.Path:
-    return pathlib.Path(os.environ.get("JCODE_HOME", pathlib.Path.home() / ".jcode"))
+def mona_home() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("MONA_HOME", pathlib.Path.home() / ".jcode"))
 
 
 def log_files(log_dir: pathlib.Path, max_log_files: int) -> list[pathlib.Path]:
-    files = sorted(log_dir.glob("jcode-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(log_dir.glob("mona-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
     return list(reversed(files[:max_log_files]))
 
 
@@ -413,7 +413,7 @@ def parse_logs(files: list[pathlib.Path]) -> tuple[dict[tuple[str, str], IntentR
 
 
 def parse_trace_files(records: dict[tuple[str, str], IntentRecord], trace_dir: pathlib.Path) -> None:
-    """Merge structured ~/.jcode/reload-traces/*.jsonl lifecycle events."""
+    """Merge structured ~/.mona/reload-traces/*.jsonl lifecycle events."""
     phase_to_kind = {
         "intent_attached_to_history": "attached",
         "intent_delivered": "delivered",
@@ -596,7 +596,7 @@ def render_table(records: list[IntentRecord], hidden_sends: list[Event], show_li
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit self-dev reload recovery handoffs")
-    parser.add_argument("--home", type=pathlib.Path, default=jcode_home(), help="JCODE_HOME path")
+    parser.add_argument("--home", type=pathlib.Path, default=mona_home(), help="MONA_HOME path")
     parser.add_argument("--reload-id", type=str, help="Only show one reload id")
     parser.add_argument("--session", type=str, help="Only show one session id")
     parser.add_argument("--max-log-files", type=int, default=3, help="Newest jcode logs to scan")

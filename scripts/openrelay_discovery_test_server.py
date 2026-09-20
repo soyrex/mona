@@ -39,7 +39,7 @@ CATEGORIES = {
 TOOL = {
     "name": "openrelay-rivet",
     "blurb": "public Ethereum Classic JSON-RPC endpoint operated by OpenRelay",
-    "url": "https://rivet.link/networks?via=jcode-discovery-test",
+    "url": "https://rivet.link/networks?via=mona-discovery-test",
     "setup": "\n".join(
         [
             "Complete agent setup protocol (no signup or documentation fetch is required):",

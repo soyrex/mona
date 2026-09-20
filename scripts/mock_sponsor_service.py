@@ -115,12 +115,12 @@ def make_handler(db_path: Path, secret: bytes):
                 listing = {
                     "name": "mock-sponsor",
                     "blurb": "Reference virtual payment service for attribution validation",
-                    "url": f"{server_url(self.server)}/?via=jcode-discovery",
+                    "url": f"{server_url(self.server)}/?via=mona-discovery",
                 }
                 if query.get("tool", [None])[0] == "mock-sponsor":
                     listing["setup"] = (
                         f"Run `python {Path(__file__).resolve()} signup --service "
-                        f"{server_url(self.server)} --email <email> --via jcode-discovery`, "
+                        f"{server_url(self.server)} --email <email> --via mona-discovery`, "
                         "then confirm the returned magic link."
                     )
                     self.send_json(200, {"tool": listing})

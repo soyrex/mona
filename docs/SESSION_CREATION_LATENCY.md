@@ -42,8 +42,8 @@ from idle prewarm, so future startup regressions are directly attributable.
 
 ## Reproducible transport regression
 
-`crates/jcode-telemetry-core/tests/session_creation_latency.rs` calls the real
-public telemetry API in a subprocess with a temporary JCODE_HOME. It seeds a
+`crates/mona-telemetry-core/tests/session_creation_latency.rs` calls the real
+public telemetry API in a subprocess with a temporary MONA_HOME. It seeds a
 session and turn, then times the same begin_session replacement used by Agent
 construction. A loopback HTTP proxy accepts CONNECT and never responds. All HTTPS
 telemetry is trapped locally, so this test sends no telemetry to the service and
@@ -51,8 +51,8 @@ uses no model request. Unlike unit tests, it exercises production HTTP delivery,
 not the cfg(test) payload sink.
 
 ```sh
-cargo test -p jcode-telemetry-core --test session_creation_latency -- --nocapture
-cargo test -p jcode-telemetry-core --lib
+cargo test -p mona-telemetry-core --test session_creation_latency -- --nocapture
+cargo test -p mona-telemetry-core --lib
 ```
 
 Before/after binaries were compiled from this checkout's actual telemetry crate
@@ -80,7 +80,7 @@ Cargo test commands above also passed: 62 unit tests and the production HTTP
 integration test (5.029 ms for its measured replacement).
 
 A real daemon and the same standalone API bridge were run against private
-HOME, JCODE_HOME, JCODE_RUNTIME_DIR, and sockets. Both versions used the Jcode
+HOME, MONA_HOME, MONA_RUNTIME_DIR, and sockets. Both versions used the Jcode
 provider, a synthetic credential, and the loopback stalled HTTPS proxy. Selecting
 the current model through the API seeded meaningful telemetry without submitting
 any prompt or requesting model inference. Each following create_session then
@@ -105,7 +105,7 @@ The verified new binary was copied to the immutable store and published to the
 current channel without touching the stable channel, shared-server channel, or
 running daemon:
 
-- Binary: `~/.jcode/builds/versions/82a93e6fb-dirty-e293f2a72492/jcode`
+- Binary: `~/.mona/builds/versions/82a93e6fb-dirty-e293f2a72492/jcode`
 - SHA-256: `e293f2a7249263a664aceb413d1df0d96ed53cf12f15119a4ca31ebd8fb5a330`
 - Version: `v0.82.5-dev (82a93e6fb, dirty)`
 - The build stamp predates commit `8e9f40498`, but the build includes the tested fix.

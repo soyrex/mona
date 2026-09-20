@@ -9,7 +9,7 @@ Primary goal: make normal development and selfdev builds faster by shrinking the
 - Move stable DTOs and protocol-safe state into small crates so changes in root behavior do not recompile those contracts, and changes in contracts recompile only focused dependents.
 - Keep dependency-light crates dependency-light so they compile quickly and do not pull large runtime/TUI/provider graphs into unrelated builds.
 - Keep root-only behavior, storage, process, TUI, server, and provider runtime logic in the root crate until a full dependency boundary can move without increasing dependency fan-out.
-- Avoid cyclic dependencies and hidden coupling through broad `jcode-core` re-exports.
+- Avoid cyclic dependencies and hidden coupling through broad `mona-core` re-exports.
 - Preserve serde compatibility and root re-exports during migrations unless all call sites are intentionally updated.
 - Measure success by compile impact: fewer root edits, fewer root-owned DTOs, smaller dependency fan-out, and faster `cargo check --profile selfdev` / `selfdev build` after common changes.
 
@@ -24,7 +24,7 @@ A `*-types` crate should contain:
 - No filesystem, network, process, TUI, provider client, global state, or storage access.
 - Dependencies limited to serde, chrono, and other type crates where necessary.
 
-Examples: `jcode-session-types`, `jcode-side-panel-types`, `jcode-selfdev-types`, `jcode-background-types`.
+Examples: `mona-session-types`, `mona-side-panel-types`, `mona-selfdev-types`, `mona-background-types`.
 
 ### Domain behavior modules own root runtime behavior
 
@@ -37,15 +37,15 @@ Root modules should keep behavior when it needs:
 
 If a type has inherent methods that need these APIs, either leave the type in root or move behavior and dependencies together into a domain crate. Do not move only the struct if that forces illegal inherent impls in root.
 
-### `jcode-core` is for genuinely shared primitives
+### `mona-core` is for genuinely shared primitives
 
-`jcode-core` should contain:
+`mona-core` should contain:
 
 - Cross-domain primitives that do not have an obvious domain crate yet.
 - Very small, dependency-light helpers used by many crates.
 - Temporary DTO staging only when creating a new domain type crate would be premature.
 
-`jcode-core` should not accumulate every extracted DTO indefinitely. Once a cluster grows, split it into a focused domain crate.
+`mona-core` should not accumulate every extracted DTO indefinitely. Once a cluster grows, split it into a focused domain crate.
 
 ### Compile-speed decision rule
 
@@ -99,7 +99,7 @@ Run this guard after adding or changing any type crate dependency:
 python3 scripts/check_dependency_boundaries.py
 ```
 
-The guard blocks direct dependencies from `jcode-*-types` crates to root/runtime-heavy internal crates such as `jcode`, `jcode-core`, provider crates, TUI crates, protocol/runtime crates, and desktop/mobile crates. Type crates may depend on external lightweight libraries and other type crates. If a new internal dependency is needed, first decide whether it should itself be a type crate.
+The guard blocks direct dependencies from `mona-*-types` crates to root/runtime-heavy internal crates such as `jcode`, `mona-core`, provider crates, TUI crates, protocol/runtime crates, and desktop/mobile crates. Type crates may depend on external lightweight libraries and other type crates. If a new internal dependency is needed, first decide whether it should itself be a type crate.
 
 ## Test policy
 
@@ -118,12 +118,12 @@ Focused validation matrix after the current DTO splits:
 
 | Area | Fast compile check | Focused root tests used during split | Notes |
 | --- | --- | --- | --- |
-| Usage DTOs | `cargo check --profile selfdev -p jcode-usage-types -p jcode --bin jcode` | Prefer exact tests under usage/copilot usage modules. Avoid bare `usage` as a required gate because it selects display/UI tests too. | DTO crate owns report and local counter contracts. Runtime fetch/cache/display stay root. |
-| Gateway DTOs | `cargo check --profile selfdev -p jcode-gateway-types -p jcode --bin jcode` | Focus gateway persistence/auth tests by exact test names when available. | Pairing/token HTTP/WebSocket behavior stays root. |
-| Ambient DTOs | `cargo check --profile selfdev -p jcode-ambient-types -p jcode --bin jcode` | Scheduler/type consumers only. | Ambient DTO crate owns usage records only. Queue/runtime/prompt behavior stays root. |
+| Usage DTOs | `cargo check --profile selfdev -p mona-usage-types -p jcode --bin jcode` | Prefer exact tests under usage/copilot usage modules. Avoid bare `usage` as a required gate because it selects display/UI tests too. | DTO crate owns report and local counter contracts. Runtime fetch/cache/display stay root. |
+| Gateway DTOs | `cargo check --profile selfdev -p mona-gateway-types -p jcode --bin jcode` | Focus gateway persistence/auth tests by exact test names when available. | Pairing/token HTTP/WebSocket behavior stays root. |
+| Ambient DTOs | `cargo check --profile selfdev -p mona-ambient-types -p jcode --bin jcode` | Scheduler/type consumers only. | Ambient DTO crate owns usage records only. Queue/runtime/prompt behavior stays root. |
 | Ambient behavior modules | `cargo check --profile selfdev -p jcode --bin jcode` | `cargo test --profile selfdev -p jcode ambient::ambient_tests --lib`; `cargo test --profile selfdev -p jcode ambient::scheduler::tests --lib`; `cargo test --profile selfdev -p jcode ambient::runner::runner_tests --lib` | Avoid bare `ambient` as a required gate for module-only refactors because it selects cross-module TUI/config state tests. |
-| Memory activity DTOs | `cargo check --profile selfdev -p jcode-memory-types -p jcode-core -p jcode --bin jcode` | `cargo test --profile selfdev -p jcode runtime_memory_log --lib`; `cargo test --profile selfdev -p jcode tui::info_widget::tests --lib` | `memory::activity` currently matches no tests, so use consumer tests. |
-| Goal/todo/catchup core DTOs | `cargo check --profile selfdev -p jcode-core -p jcode --bin jcode` | Exact goal/todo/catchup filters if behavior changes. | Currently small/stable enough to leave in `jcode-core`; revisit if churn grows. |
+| Memory activity DTOs | `cargo check --profile selfdev -p mona-memory-types -p mona-core -p jcode --bin jcode` | `cargo test --profile selfdev -p jcode runtime_memory_log --lib`; `cargo test --profile selfdev -p jcode tui::info_widget::tests --lib` | `memory::activity` currently matches no tests, so use consumer tests. |
+| Goal/todo/catchup core DTOs | `cargo check --profile selfdev -p mona-core -p jcode --bin jcode` | Exact goal/todo/catchup filters if behavior changes. | Currently small/stable enough to leave in `mona-core`; revisit if churn grows. |
 
 
 ## Compile baseline observations
@@ -134,13 +134,13 @@ Measured on 2026-04-30 with `scripts/dev_cargo.sh check --profile selfdev -p jco
 | --- | ---: | --- |
 | No-op check after recent doc-only commit | ~65.8s | Environment/cache state can dominate a first check. Treat as warmup/noise baseline, not pure no-op steady state. |
 | Touch root behavior module `src/usage.rs` | ~6.25s | A root-only behavior edit can be relatively cheap when dependencies are already built. |
-| Touch `crates/jcode-core/src/usage_types.rs` | ~65.35s | Editing `jcode-core` invalidates broad downstream dependents. Avoid adding high-churn domain DTOs to `jcode-core`. |
+| Touch `crates/mona-core/src/usage_types.rs` | ~65.35s | Editing `mona-core` invalidates broad downstream dependents. Avoid adding high-churn domain DTOs to `mona-core`. |
 
-Implication: the compile-speed target is not simply "move things out of root". Moving stable, low-churn contracts out of root is good, but putting many high-churn domain DTOs into `jcode-core` can be counterproductive because `jcode-core` has high fan-out. Prefer focused leaf crates such as `jcode-usage-types`, `jcode-gateway-types`, and `jcode-ambient-types` for domain DTOs that are likely to change.
+Implication: the compile-speed target is not simply "move things out of root". Moving stable, low-churn contracts out of root is good, but putting many high-churn domain DTOs into `mona-core` can be counterproductive because `mona-core` has high fan-out. Prefer focused leaf crates such as `mona-usage-types`, `mona-gateway-types`, and `mona-ambient-types` for domain DTOs that are likely to change.
 
-## `jcode-core` fan-out audit
+## `mona-core` fan-out audit
 
-At this checkpoint, the root crate is the only direct Cargo dependency on `jcode-core`, but root re-exports many `jcode-core` modules and root is the high-cost recompilation target. A touch to `jcode-core` invalidated broad downstream checks in the baseline above. Therefore `jcode-core` should be treated as a high-fan-out crate even if Cargo.toml direct dependents are currently few.
+At this checkpoint, the root crate is the only direct Cargo dependency on `mona-core`, but root re-exports many `mona-core` modules and root is the high-cost recompilation target. A touch to `mona-core` invalidated broad downstream checks in the baseline above. Therefore `mona-core` should be treated as a high-fan-out crate even if Cargo.toml direct dependents are currently few.
 
 Observed root re-export/use paths:
 
@@ -151,20 +151,20 @@ Observed root re-export/use paths:
 
 Compile-speed priority from this audit:
 
-1. Move clustered, likely-changing domain DTOs from `jcode-core` to focused leaf crates.
-2. Keep stable general utilities in `jcode-core`.
-3. Avoid adding new domain DTOs to `jcode-core` unless they are very stable or temporary staging.
+1. Move clustered, likely-changing domain DTOs from `mona-core` to focused leaf crates.
+2. Keep stable general utilities in `mona-core`.
+3. Avoid adding new domain DTOs to `mona-core` unless they are very stable or temporary staging.
 
 | Module | Current contents | Preferred long-term home | Notes |
 | --- | --- | --- | --- |
-| `ambient_usage_types` | Ambient scheduler usage records/rate limit DTOs | moved to `jcode-ambient-types` | Compatibility re-export remains in root module. |
-| `catchup_types` | Catch-up persisted state and rendered brief DTOs | `jcode-catchup-types` or stay in core | Small and low churn. Split only if catch-up grows. |
-| `copilot_usage_types` | Local Copilot usage counters | moved to `jcode-usage-types` | Compatibility re-export remains in root module. |
-| `gateway_types` | Paired device and pairing code persisted records | moved to `jcode-gateway-types` | Pairing/token behavior remains root. |
-| `goal_types` | Goal state, milestones, status, updates | `jcode-goal-types` or `jcode-task-types` | Larger domain. Worth splitting if goal/tool work grows. |
-| `memory_types` | Memory activity DTOs | moved to `jcode-memory-types` | Memory has enough domain weight for its own type crate. |
-| `todo_types` | Todo item DTO | `jcode-task-types`, `jcode-todo-types`, or core | Tiny. Could join goal/catchup task-state crate. |
-| `usage_types` | Provider usage report DTOs | moved to `jcode-usage-types` | Runtime fetch/cache/display remain root. |
+| `ambient_usage_types` | Ambient scheduler usage records/rate limit DTOs | moved to `mona-ambient-types` | Compatibility re-export remains in root module. |
+| `catchup_types` | Catch-up persisted state and rendered brief DTOs | `mona-catchup-types` or stay in core | Small and low churn. Split only if catch-up grows. |
+| `copilot_usage_types` | Local Copilot usage counters | moved to `mona-usage-types` | Compatibility re-export remains in root module. |
+| `gateway_types` | Paired device and pairing code persisted records | moved to `mona-gateway-types` | Pairing/token behavior remains root. |
+| `goal_types` | Goal state, milestones, status, updates | `mona-goal-types` or `mona-task-types` | Larger domain. Worth splitting if goal/tool work grows. |
+| `memory_types` | Memory activity DTOs | moved to `mona-memory-types` | Memory has enough domain weight for its own type crate. |
+| `todo_types` | Todo item DTO | `mona-task-types`, `mona-todo-types`, or core | Tiny. Could join goal/catchup task-state crate. |
+| `usage_types` | Provider usage report DTOs | moved to `mona-usage-types` | Runtime fetch/cache/display remain root. |
 | `env` | Environment variable helpers | stay in core | General utility, no domain crate needed. |
 | `id` | ID helpers | stay in core | General utility. |
 | `panic_util` | Panic formatting helpers | stay in core | General runtime utility. |
@@ -175,21 +175,21 @@ Compile-speed priority from this audit:
 
 Completed/high-value domain type splits:
 
-1. `jcode-usage-types`
+1. `mona-usage-types`
    - `usage_types`
    - `copilot_usage_types`
    - pure account usage DTOs if/when separated from root formatting/runtime helpers
 
-2. `jcode-gateway-types`
+2. `mona-gateway-types`
    - `gateway_types`
    - possibly `GatewayConfig` after deciding whether config owns it
    - mobile gateway protocol-safe DTOs if needed by mobile crates
 
-3. `jcode-ambient-types`
+3. `mona-ambient-types`
    - `ambient_usage_types`
    - ambient state/request/result DTOs, but only after root-only `AmbientState::load/save/record_cycle` methods are separated into root free functions or a persistence layer
 
-4. `jcode-memory-types`
+4. `mona-memory-types`
    - `memory_types`
    - any memory protocol/activity DTOs used across server/TUI/tools
 
@@ -235,7 +235,7 @@ Target split:
 - local caches/sync
 - display formatting
 - account selection/guidance
-- public report DTOs in `jcode-usage-types`
+- public report DTOs in `mona-usage-types`
 
 ### `src/gateway.rs`
 
@@ -246,14 +246,14 @@ Target split:
 - HTTP route handling
 - WebSocket auth/extraction
 - WebSocket relay
-- public gateway DTOs in `jcode-gateway-types`
+- public gateway DTOs in `mona-gateway-types`
 
 ## Definition of “optimal enough”
 
 The structure is good enough when:
 
 - Each type crate has a clear domain and minimal dependency set.
-- `jcode-core` contains only true primitives or documented temporary staging modules.
+- `mona-core` contains only true primitives or documented temporary staging modules.
 - Root modules no longer mix large DTO blocks, persistence, runtime orchestration, and rendering in one file.
 - Every domain has focused validation commands.
 - Selfdev build/reload works cleanly after every structural change.

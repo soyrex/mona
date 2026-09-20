@@ -14,9 +14,9 @@ use tokio_stream::wrappers::ReceiverStream;
 #[tokio::test]
 async fn memory_cli_project_import_uses_explicit_directory_and_persists() {
     let _guard = crate::storage::lock_test_env();
-    let _saved = SavedEnv::capture(&["JCODE_HOME"]);
+    let _saved = SavedEnv::capture(&["MONA_HOME"]);
     let temp = tempfile::tempdir().expect("temp dir");
-    crate::env::set_var("JCODE_HOME", temp.path().join("home"));
+    crate::env::set_var("MONA_HOME", temp.path().join("home"));
     let project = temp.path().join("project");
     std::fs::create_dir_all(&project).expect("create project");
 
@@ -78,16 +78,16 @@ async fn memory_cli_project_import_fails_without_durable_project_store() {
 async fn memory_cli_semantic_requires_jev_but_keyword_search_remains_local() {
     let _guard = crate::storage::lock_test_env();
     let keys = [
-        "JCODE_HOME",
-        "JCODE_API_KEY",
+        "MONA_HOME",
+        "MONA_API_KEY",
         "OPENROUTER_API_KEY",
         "TYPESAFE_API_KEY",
         "AIMLAPI_API_KEY",
-        "JCODE_MEMORY_JEV_PROVIDER",
+        "MONA_MEMORY_JEV_PROVIDER",
     ];
     let _saved = SavedEnv::capture(&keys);
     let temp = tempfile::tempdir().expect("temp dir");
-    crate::env::set_var("JCODE_HOME", temp.path().join("home"));
+    crate::env::set_var("MONA_HOME", temp.path().join("home"));
     for key in &keys[1..] {
         crate::env::remove_var(key);
     }
@@ -636,9 +636,9 @@ fn run_auto_poke_prefers_incomplete_todos_over_the_gate_digest() {
 #[test]
 fn open_todos_do_not_consume_the_pending_gate_digest() {
     let _guard = crate::storage::lock_test_env();
-    let previous_home = std::env::var_os("JCODE_HOME");
+    let previous_home = std::env::var_os("MONA_HOME");
     let dir = tempfile::TempDir::new().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", dir.path());
+    crate::env::set_var("MONA_HOME", dir.path());
     let session = "run-gate-digest-open-todos";
 
     crate::todo::append_gate_observations(
@@ -699,8 +699,8 @@ fn open_todos_do_not_consume_the_pending_gate_digest() {
     );
 
     match previous_home {
-        Some(value) => crate::env::set_var("JCODE_HOME", value),
-        None => crate::env::remove_var("JCODE_HOME"),
+        Some(value) => crate::env::set_var("MONA_HOME", value),
+        None => crate::env::remove_var("MONA_HOME"),
     }
 }
 
@@ -709,9 +709,9 @@ fn open_todos_do_not_consume_the_pending_gate_digest() {
 #[test]
 fn take_run_gate_digest_consumes_the_log_and_respects_delivery() {
     let _guard = crate::storage::lock_test_env();
-    let previous_home = std::env::var_os("JCODE_HOME");
+    let previous_home = std::env::var_os("MONA_HOME");
     let dir = tempfile::TempDir::new().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", dir.path());
+    crate::env::set_var("MONA_HOME", dir.path());
     let session = "run-gate-digest";
 
     crate::todo::append_gate_observations(
@@ -739,8 +739,8 @@ fn take_run_gate_digest_consumes_the_log_and_respects_delivery() {
     assert!(take_run_gate_digest(session, false).is_none());
 
     match previous_home {
-        Some(value) => crate::env::set_var("JCODE_HOME", value),
-        None => crate::env::remove_var("JCODE_HOME"),
+        Some(value) => crate::env::set_var("MONA_HOME", value),
+        None => crate::env::remove_var("MONA_HOME"),
     }
 }
 
@@ -875,9 +875,9 @@ fn cloud_sessions_args_match_jade_helper_contract() {
 #[test]
 fn cloud_sessions_config_persists_secret_and_feeds_helper_env_without_args() {
     let _guard = crate::storage::lock_test_env();
-    let _saved = SavedEnv::capture(&["JCODE_HOME", "JADE_TOKEN_FOR_TEST"]);
+    let _saved = SavedEnv::capture(&["MONA_HOME", "JADE_TOKEN_FOR_TEST"]);
     let temp = tempfile::tempdir().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", temp.path());
+    crate::env::set_var("MONA_HOME", temp.path());
     crate::env::set_var("JADE_TOKEN_FOR_TEST", "secret-token-value");
 
     run_cloud_sessions_configure(
@@ -965,9 +965,9 @@ fn collect_sync_candidates_picks_only_session_json() {
 #[test]
 fn cloud_sessions_sync_dry_run_reports_without_uploading_or_writing_state() {
     let _guard = crate::storage::lock_test_env();
-    let _saved = SavedEnv::capture(&["JCODE_HOME", "JCODE_JADE_SESSIONS_HELPER"]);
+    let _saved = SavedEnv::capture(&["MONA_HOME", "MONA_JADE_SESSIONS_HELPER"]);
     let temp = tempfile::tempdir().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", temp.path());
+    crate::env::set_var("MONA_HOME", temp.path());
 
     // A dummy helper that should never run during a dry run.
     let helper = temp.path().join("never_runs.sh");
@@ -977,7 +977,7 @@ fn cloud_sessions_sync_dry_run_reports_without_uploading_or_writing_state() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    crate::env::set_var("JCODE_JADE_SESSIONS_HELPER", &helper);
+    crate::env::set_var("MONA_JADE_SESSIONS_HELPER", &helper);
 
     let sessions_dir = temp.path().join("sessions");
     std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -1008,9 +1008,9 @@ fn cloud_sessions_sync_dry_run_reports_without_uploading_or_writing_state() {
 #[test]
 fn cloud_sessions_sync_respects_min_interval_throttle() {
     let _guard = crate::storage::lock_test_env();
-    let _saved = SavedEnv::capture(&["JCODE_HOME", "JCODE_JADE_SESSIONS_HELPER"]);
+    let _saved = SavedEnv::capture(&["MONA_HOME", "MONA_JADE_SESSIONS_HELPER"]);
     let temp = tempfile::tempdir().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", temp.path());
+    crate::env::set_var("MONA_HOME", temp.path());
 
     // Helper that would fail loudly if it ever ran during a throttled run.
     let helper = temp.path().join("must_not_run.sh");
@@ -1020,7 +1020,7 @@ fn cloud_sessions_sync_respects_min_interval_throttle() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    crate::env::set_var("JCODE_JADE_SESSIONS_HELPER", &helper);
+    crate::env::set_var("MONA_JADE_SESSIONS_HELPER", &helper);
 
     let sessions_dir = temp.path().join("sessions");
     std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -1175,8 +1175,8 @@ fn parse_cloud_session_list_json_rejects_unexpected_shapes() {
 
 #[test]
 fn resolve_jade_sessions_helper_prefers_explicit_and_env_paths() {
-    let _saved = SavedEnv::capture(&["JCODE_JADE_SESSIONS_HELPER"]);
-    crate::env::set_var("JCODE_JADE_SESSIONS_HELPER", "/tmp/from-env.py");
+    let _saved = SavedEnv::capture(&["MONA_JADE_SESSIONS_HELPER"]);
+    crate::env::set_var("MONA_JADE_SESSIONS_HELPER", "/tmp/from-env.py");
 
     assert_eq!(
         resolve_jade_sessions_helper(Some("/tmp/explicit.py")).unwrap(),
@@ -1250,20 +1250,20 @@ async fn auth_test_choice_plan_leaves_non_compat_provider_unchanged() {
 async fn auth_test_choice_plan_discovers_model_for_local_custom_compat_endpoint() {
     let _env_guard = crate::storage::lock_test_env();
     let _saved = SavedEnv::capture(&[
-        "JCODE_OPENAI_COMPAT_API_BASE",
-        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
-        "JCODE_OPENAI_COMPAT_ENV_FILE",
-        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
-        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
-        "JCODE_OPENROUTER_API_BASE",
-        "JCODE_OPENROUTER_API_KEY_NAME",
-        "JCODE_OPENROUTER_ENV_FILE",
-        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+        "MONA_OPENAI_COMPAT_API_BASE",
+        "MONA_OPENAI_COMPAT_API_KEY_NAME",
+        "MONA_OPENAI_COMPAT_ENV_FILE",
+        "MONA_OPENAI_COMPAT_DEFAULT_MODEL",
+        "MONA_OPENAI_COMPAT_LOCAL_ENABLED",
+        "MONA_OPENROUTER_API_BASE",
+        "MONA_OPENROUTER_API_KEY_NAME",
+        "MONA_OPENROUTER_ENV_FILE",
+        "MONA_OPENROUTER_ALLOW_NO_AUTH",
     ]);
     let api_base = spawn_single_response_http_server(200, r#"{"data":[{"id":"llama3.2"}]}"#);
-    crate::env::set_var("JCODE_OPENAI_COMPAT_API_BASE", &api_base);
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_LOCAL_ENABLED");
+    crate::env::set_var("MONA_OPENAI_COMPAT_API_BASE", &api_base);
+    crate::env::remove_var("MONA_OPENAI_COMPAT_DEFAULT_MODEL");
+    crate::env::remove_var("MONA_OPENAI_COMPAT_LOCAL_ENABLED");
     crate::provider_catalog::apply_openai_compatible_profile_env(None);
 
     let plan = auth_test_choice_plan(
@@ -1283,15 +1283,15 @@ async fn auth_test_choice_plan_discovers_model_for_local_custom_compat_endpoint(
 async fn auth_test_choice_plan_discovers_model_for_hosted_custom_compat_endpoint_with_api_key() {
     let _env_guard = crate::storage::lock_test_env();
     let _saved = SavedEnv::capture(&[
-        "JCODE_OPENAI_COMPAT_API_BASE",
-        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
-        "JCODE_OPENAI_COMPAT_ENV_FILE",
-        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
-        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
-        "JCODE_OPENROUTER_API_BASE",
-        "JCODE_OPENROUTER_API_KEY_NAME",
-        "JCODE_OPENROUTER_ENV_FILE",
-        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+        "MONA_OPENAI_COMPAT_API_BASE",
+        "MONA_OPENAI_COMPAT_API_KEY_NAME",
+        "MONA_OPENAI_COMPAT_ENV_FILE",
+        "MONA_OPENAI_COMPAT_DEFAULT_MODEL",
+        "MONA_OPENAI_COMPAT_LOCAL_ENABLED",
+        "MONA_OPENROUTER_API_BASE",
+        "MONA_OPENROUTER_API_KEY_NAME",
+        "MONA_OPENROUTER_ENV_FILE",
+        "MONA_OPENROUTER_ALLOW_NO_AUTH",
         "OPENAI_COMPAT_API_KEY",
         "NO_PROXY",
         "no_proxy",
@@ -1304,12 +1304,12 @@ async fn auth_test_choice_plan_discovers_model_for_hosted_custom_compat_endpoint
         200,
         r#"{"data":[{"id":"hosted-compatible-model"}]}"#,
     );
-    crate::env::set_var("JCODE_OPENAI_COMPAT_API_BASE", &api_base);
+    crate::env::set_var("MONA_OPENAI_COMPAT_API_BASE", &api_base);
     crate::env::set_var("OPENAI_COMPAT_API_KEY", "test-key");
     crate::env::set_var("NO_PROXY", "0.0.0.0,127.0.0.1,localhost");
     crate::env::set_var("no_proxy", "0.0.0.0,127.0.0.1,localhost");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_LOCAL_ENABLED");
+    crate::env::remove_var("MONA_OPENAI_COMPAT_DEFAULT_MODEL");
+    crate::env::remove_var("MONA_OPENAI_COMPAT_LOCAL_ENABLED");
     crate::provider_catalog::apply_openai_compatible_profile_env(None);
 
     let resolved = crate::provider_catalog::resolve_openai_compatible_profile(
@@ -1336,20 +1336,20 @@ async fn auth_test_choice_plan_discovers_model_for_hosted_custom_compat_endpoint
 async fn auth_test_choice_plan_skips_local_custom_compat_endpoint_without_models() {
     let _env_guard = crate::storage::lock_test_env();
     let _saved = SavedEnv::capture(&[
-        "JCODE_OPENAI_COMPAT_API_BASE",
-        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
-        "JCODE_OPENAI_COMPAT_ENV_FILE",
-        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
-        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
-        "JCODE_OPENROUTER_API_BASE",
-        "JCODE_OPENROUTER_API_KEY_NAME",
-        "JCODE_OPENROUTER_ENV_FILE",
-        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+        "MONA_OPENAI_COMPAT_API_BASE",
+        "MONA_OPENAI_COMPAT_API_KEY_NAME",
+        "MONA_OPENAI_COMPAT_ENV_FILE",
+        "MONA_OPENAI_COMPAT_DEFAULT_MODEL",
+        "MONA_OPENAI_COMPAT_LOCAL_ENABLED",
+        "MONA_OPENROUTER_API_BASE",
+        "MONA_OPENROUTER_API_KEY_NAME",
+        "MONA_OPENROUTER_ENV_FILE",
+        "MONA_OPENROUTER_ALLOW_NO_AUTH",
     ]);
     let api_base = spawn_single_response_http_server(200, r#"{"data":[]}"#);
-    crate::env::set_var("JCODE_OPENAI_COMPAT_API_BASE", &api_base);
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
-    crate::env::remove_var("JCODE_OPENAI_COMPAT_LOCAL_ENABLED");
+    crate::env::set_var("MONA_OPENAI_COMPAT_API_BASE", &api_base);
+    crate::env::remove_var("MONA_OPENAI_COMPAT_DEFAULT_MODEL");
+    crate::env::remove_var("MONA_OPENAI_COMPAT_LOCAL_ENABLED");
     crate::provider_catalog::apply_openai_compatible_profile_env(None);
 
     let plan = auth_test_choice_plan(
@@ -1469,10 +1469,10 @@ async fn restore_agent_session_if_requested_restores_resumed_session() {
 #[tokio::test]
 async fn one_shot_output_modes_close_sessions_and_clear_active_pid_markers() {
     let _guard = crate::storage::lock_test_env();
-    let _saved = SavedEnv::capture(&["JCODE_HOME", "JCODE_RUN_AUTO_POKE"]);
+    let _saved = SavedEnv::capture(&["MONA_HOME", "MONA_RUN_AUTO_POKE"]);
     let temp = tempfile::tempdir().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", temp.path());
-    crate::env::set_var("JCODE_RUN_AUTO_POKE", "0");
+    crate::env::set_var("MONA_HOME", temp.path());
+    crate::env::set_var("MONA_RUN_AUTO_POKE", "0");
 
     for (mode, emit_json, emit_ndjson) in [
         ("plain", false, false),
@@ -1521,10 +1521,10 @@ async fn one_shot_output_modes_close_sessions_and_clear_active_pid_markers() {
 #[tokio::test]
 async fn resumed_one_shot_closes_the_restored_session() {
     let _guard = crate::storage::lock_test_env();
-    let _saved = SavedEnv::capture(&["JCODE_HOME", "JCODE_RUN_AUTO_POKE"]);
+    let _saved = SavedEnv::capture(&["MONA_HOME", "MONA_RUN_AUTO_POKE"]);
     let temp = tempfile::tempdir().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", temp.path());
-    crate::env::set_var("JCODE_RUN_AUTO_POKE", "0");
+    crate::env::set_var("MONA_HOME", temp.path());
+    crate::env::set_var("MONA_RUN_AUTO_POKE", "0");
 
     let provider: Arc<dyn Provider> = Arc::new(TestProvider);
     let registry = Registry::new(provider.clone()).await;
@@ -1575,10 +1575,10 @@ async fn resumed_one_shot_closes_the_restored_session() {
 #[tokio::test]
 async fn one_shot_cleanup_preserves_the_original_command_error() {
     let _guard = crate::storage::lock_test_env();
-    let _saved = SavedEnv::capture(&["JCODE_HOME", "JCODE_RUN_AUTO_POKE"]);
+    let _saved = SavedEnv::capture(&["MONA_HOME", "MONA_RUN_AUTO_POKE"]);
     let temp = tempfile::tempdir().expect("tempdir");
-    crate::env::set_var("JCODE_HOME", temp.path());
-    crate::env::set_var("JCODE_RUN_AUTO_POKE", "0");
+    crate::env::set_var("MONA_HOME", temp.path());
+    crate::env::set_var("MONA_RUN_AUTO_POKE", "0");
 
     for (mode, emit_json, emit_ndjson) in [
         ("plain", false, false),

@@ -38,7 +38,7 @@ constraints, so you can debug cheaply and escalate only when needed.
 
 | Tier | Needs key? | Spends balance? | What it adds | Catches |
 | --- | --- | --- | --- | --- |
-| `offline` | no | no | jcode-side wiring against a synthetic catalog | catalog reload, picker rendering, fallback labeling, and model-switch routing bugs for this provider |
+| `offline` | no | no | mona-side wiring against a synthetic catalog | catalog reload, picker rendering, fallback labeling, and model-switch routing bugs for this provider |
 | `catalog` (default) | yes | ~none | live `GET /models` | bad/missing key, dead endpoint, model not in the live catalog |
 | `full` | yes | yes | non-streaming chat, streaming, tool-call loop | the model actually chats, streams, and supports tool-calling |
 
@@ -62,7 +62,7 @@ when all of them pass on the `full` tier.
 9. `tool_call_parse` - the model emitted a parseable tool call (full tier)
 10. `tool_execution_loop` - the tool-call loop ran (full tier)
 11. `tool_result_followup` - the tool result was fed back (full tier)
-12. `real_jcode_tool_smoke` - an end-to-end tool smoke passed (full tier)
+12. `real_mona_tool_smoke` - an end-to-end tool smoke passed (full tier)
 
 (Checkpoints 1-2 plus the auth-lifecycle stages are pre-flight; 7-12 are the
 API-dependent ones gated behind `--tier full`.)
@@ -123,7 +123,7 @@ summing the latest run per pair. That gives you a durable, at-a-glance answer to
 
 1. **"My picker is broken / shows the wrong models."**
    Run `--tier offline`. If `picker_live_models`, `picker_fallback_labeling`, or
-   `model_switch_route` fail, it's a jcode-side routing bug for that provider:
+   `model_switch_route` fail, it's a mona-side routing bug for that provider:
    capture the output and file an issue.
 
 2. **"It won't connect / says auth failed."**

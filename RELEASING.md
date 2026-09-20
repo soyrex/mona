@@ -71,7 +71,7 @@ Tag push (v*)
           ├─► Generate and upload SHA256SUMS
           ├─► Publish the available release assets
           ├─► Update Homebrew formula (1jehuang/homebrew-jcode)
-          └─► Update AUR package (jcode-bin)
+          └─► Update AUR package (mona-bin)
 ```
 
 Key design decisions:
@@ -89,7 +89,7 @@ Key design decisions:
 CI handles Homebrew and AUR updates automatically:
 
 - **Homebrew**: Updates `Formula/jcode.rb` in `1jehuang/homebrew-jcode` with new SHA256 hashes
-- **AUR**: Updates `PKGBUILD` and `.SRCINFO` in the `jcode-bin` AUR repo
+- **AUR**: Updates `PKGBUILD` and `.SRCINFO` in the `mona-bin` AUR repo
 
 Both are triggered conditionally by the final `release` job. Homebrew updates only when all four Linux/macOS formula assets exist; AUR updates whenever Linux x86_64 exists.
 

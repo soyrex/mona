@@ -67,16 +67,16 @@ class RunResult:
     error: Optional[str] = None
 
 
-def find_jcode_binary() -> str:
+def find_mona_binary() -> str:
     """Find the jcode binary."""
     # Check target/release first
     repo_root = Path(__file__).parent.parent
-    release_binary = repo_root / "target" / "release" / "jcode"
+    release_binary = repo_root / "target" / "release" / "mona"
     if release_binary.exists():
         return str(release_binary)
 
     # Check PATH
-    result = subprocess.run(["which", "jcode"], capture_output=True, text=True)
+    result = subprocess.run(["which", "mona"], capture_output=True, text=True)
     if result.returncode == 0:
         return result.stdout.strip()
 
@@ -161,18 +161,18 @@ def run_claude_cli(prompt: str, workdir: str, model: str = "opus") -> RunResult:
         )
 
 
-def run_jcode(prompt: str, workdir: str, jcode_binary: str, model: str = "claude-opus-4-5-20251101") -> RunResult:
+def run_jcode(prompt: str, workdir: str, mona_binary: str, model: str = "claude-opus-4-5-20251101") -> RunResult:
     """Run jcode and capture token usage from trace output."""
     try:
-        # Create a temporary JCODE_HOME to avoid polluting user's sessions
+        # Create a temporary MONA_HOME to avoid polluting user's sessions
         with tempfile.TemporaryDirectory() as tmpdir:
             env = os.environ.copy()
-            env["JCODE_HOME"] = tmpdir
-            env["JCODE_TRACE"] = "1"
+            env["MONA_HOME"] = tmpdir
+            env["MONA_TRACE"] = "1"
 
             result = subprocess.run(
                 [
-                    jcode_binary,
+                    mona_binary,
                     "run",
                     "--no-update",
                     "--model", model,
@@ -213,7 +213,7 @@ def run_jcode(prompt: str, workdir: str, jcode_binary: str, model: str = "claude
             )
 
             return RunResult(
-                tool="jcode",
+                tool="mona",
                 prompt=prompt,
                 usage=token_usage,
                 success=result.returncode == 0,
@@ -223,7 +223,7 @@ def run_jcode(prompt: str, workdir: str, jcode_binary: str, model: str = "claude
 
     except subprocess.TimeoutExpired:
         return RunResult(
-            tool="jcode",
+            tool="mona",
             prompt=prompt,
             usage=TokenUsage(0, 0, 0, 0),
             success=False,
@@ -232,7 +232,7 @@ def run_jcode(prompt: str, workdir: str, jcode_binary: str, model: str = "claude
         )
     except Exception as e:
         return RunResult(
-            tool="jcode",
+            tool="mona",
             prompt=prompt,
             usage=TokenUsage(0, 0, 0, 0),
             success=False,
@@ -241,10 +241,10 @@ def run_jcode(prompt: str, workdir: str, jcode_binary: str, model: str = "claude
         )
 
 
-def compare_usage(claude_result: RunResult, jcode_result: RunResult, verbose: bool = False) -> dict:
+def compare_usage(claude_result: RunResult, mona_result: RunResult, verbose: bool = False) -> dict:
     """Compare token usage between Claude CLI and jcode."""
     c = claude_result.usage
-    j = jcode_result.usage
+    j = mona_result.usage
 
     # Calculate differences
     input_diff = j.input_tokens - c.input_tokens
@@ -273,7 +273,7 @@ def compare_usage(claude_result: RunResult, jcode_result: RunResult, verbose: bo
             "cost_usd": c.total_cost_usd,
             "duration_ms": c.duration_ms,
         },
-        "jcode": {
+        "mona": {
             "input": j.input_tokens,
             "output": j.output_tokens,
             "cache_read": j.cache_read_tokens,
@@ -302,7 +302,7 @@ def print_comparison(comparison: dict, prompt: str, verbose: bool = False):
     print(f"{'='*60}")
 
     c = comparison["claude"]
-    j = comparison["jcode"]
+    j = comparison["mona"]
     d = comparison["diff"]
     p = comparison["pct_diff"]
 
@@ -330,8 +330,8 @@ def run_test_suite(verbose: bool = False, runs: int = 1) -> list:
         "List three primary colors, one per line.",
     ]
 
-    jcode_binary = find_jcode_binary()
-    print(f"Using jcode binary: {jcode_binary}")
+    mona_binary = find_mona_binary()
+    print(f"Using jcode binary: {mona_binary}")
     print(f"Running {len(prompts)} prompts, {runs} run(s) each\n")
 
     results = []
@@ -355,16 +355,16 @@ def run_test_suite(verbose: bool = False, runs: int = 1) -> list:
                 time.sleep(1)
 
                 print("  Running jcode...", end=" ", flush=True)
-                jcode_result = run_jcode(prompt, workdir, jcode_binary)
-                if jcode_result.success:
-                    print(f"OK ({jcode_result.usage.total} tokens)")
+                mona_result = run_jcode(prompt, workdir, mona_binary)
+                if mona_result.success:
+                    print(f"OK ({mona_result.usage.total} tokens)")
                 else:
-                    print(f"FAILED: {jcode_result.error}")
+                    print(f"FAILED: {mona_result.error}")
                     if verbose:
-                        print(f"    Output: {jcode_result.output[:200]}")
+                        print(f"    Output: {mona_result.output[:200]}")
 
-                if claude_result.success and jcode_result.success:
-                    comparison = compare_usage(claude_result, jcode_result, verbose)
+                if claude_result.success and mona_result.success:
+                    comparison = compare_usage(claude_result, mona_result, verbose)
                     results.append({
                         "prompt": prompt,
                         "run": run_num + 1,
@@ -391,7 +391,7 @@ def summarize_results(results: list) -> bool:
     print(f"{'='*60}")
 
     total_claude = sum(r["comparison"]["claude"]["total"] for r in results)
-    total_jcode = sum(r["comparison"]["jcode"]["total"] for r in results)
+    total_jcode = sum(r["comparison"]["mona"]["total"] for r in results)
     total_diff = total_jcode - total_claude
 
     # Also compare just input+output (excluding cache)
@@ -399,8 +399,8 @@ def summarize_results(results: list) -> bool:
         r["comparison"]["claude"]["input"] + r["comparison"]["claude"]["output"]
         for r in results
     )
-    total_jcode_io = sum(
-        r["comparison"]["jcode"]["input"] + r["comparison"]["jcode"]["output"]
+    total_mona_io = sum(
+        r["comparison"]["mona"]["input"] + r["comparison"]["mona"]["output"]
         for r in results
     )
 
@@ -417,10 +417,10 @@ def summarize_results(results: list) -> bool:
 
     print(f"\n--- Input + Output only (excluding cache) ---")
     print(f"Claude CLI: {total_claude_io}")
-    print(f"jcode:      {total_jcode_io}")
+    print(f"jcode:      {total_mona_io}")
     if total_claude_io > 0:
-        io_pct_diff = ((total_jcode_io - total_claude_io) / total_claude_io) * 100
-        print(f"Difference: {total_jcode_io - total_claude_io:+} ({io_pct_diff:+.1f}%)")
+        io_pct_diff = ((total_mona_io - total_claude_io) / total_claude_io) * 100
+        print(f"Difference: {total_mona_io - total_claude_io:+} ({io_pct_diff:+.1f}%)")
 
     # Check if within acceptable bounds
     # jcode using fewer tokens is always good (negative diff)
@@ -444,7 +444,7 @@ def summarize_results(results: list) -> bool:
     for r in results:
         prompt = r["prompt"][:37] + "..." if len(r["prompt"]) > 40 else r["prompt"]
         c_total = r["comparison"]["claude"]["total"]
-        j_total = r["comparison"]["jcode"]["total"]
+        j_total = r["comparison"]["mona"]["total"]
         diff = j_total - c_total
         print(f"{prompt:<40} {c_total:<10} {j_total:<10} {diff:+<10}")
 

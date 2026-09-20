@@ -9,7 +9,7 @@ The current Mermaid path is difficult to reason about because rendering, caching
 
 Observed pain points:
 
-- `jcode-tui-mermaid/src/lib.rs` is still a state hub despite the crate split.
+- `mona-tui-mermaid/src/lib.rs` is still a state hub despite the crate split.
 - Markdown rendering decides Mermaid behavior directly, including streaming/deferred/side-only registration rules.
 - Active diagrams are registered as a side effect of render calls, so simply preparing markdown mutates pinned-pane state.
 - `with_preferred_aspect_ratio` uses thread-local state, so cache keys and render sizing depend on ambient context.
@@ -19,7 +19,7 @@ Observed pain points:
 
 ## Size API direction
 
-The renderer now has an `mmdr-size-api` path guarded by the `mmdr-size-api` feature plus `JCODE_MMDR_SIZE_API_AVAILABLE=1`. That should become the primary path for the redesign:
+The renderer now has an `mmdr-size-api` path guarded by the `mmdr-size-api` feature plus `MONA_MMDR_SIZE_API_AVAILABLE=1`. That should become the primary path for the redesign:
 
 - Renderer should ask Mermaid/layout for measured SVG/canvas dimensions instead of relying on source text complexity estimates for final PNG sizing.
 - `calculate_render_size` should become a request target hint, not the source of truth for output dimensions.

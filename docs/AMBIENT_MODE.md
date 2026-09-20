@@ -163,7 +163,7 @@ Every ambient cycle **must** end with this tool call. The system uses the summar
 // Tool: end_ambient_cycle
 {
     "summary": "Merged 3 duplicate memories, pruned 2 stale facts,
-                extracted memories from crashed session jcode-red-fox-1234",
+                extracted memories from crashed session mona-red-fox-1234",
     "memories_modified": 8,
     "compactions": 2,
     "proactive_work": null,
@@ -815,7 +815,7 @@ work_branch_prefix = "ambient/"
 ## Storage
 
 ```
-~/.jcode/ambient/
+~/.mona/ambient/
 ├── state.json              # Current ambient state (status, last run, etc.)
 ├── queue.json              # Scheduled queue (persistent across restarts)
 ├── usage.json              # Usage history for adaptive calculation
@@ -931,7 +931,7 @@ This is a distributed systems problem that will be addressed once ambient is sta
 Ambient mode is shipped. The runtime loop, persistent scheduling, memory garden,
 proactive work flow, channel integration, configuration, tools, and TUI status
 display are implemented. The source of truth for current behavior is
-`crates/jcode-app-core/src/ambient/`; remaining enhancements are tracked as
+`crates/mona-app-core/src/ambient/`; remaining enhancements are tracked as
 GitHub issues rather than in the original design checklist.
 
 ---

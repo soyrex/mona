@@ -1,0 +1,13 @@
+[package]
+name = "mona-tui-messages"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+mona-config-types = { path = "../mona-config-types" }
+mona-message-types = { path = "../mona-message-types" }
+mona-session-types = { path = "../mona-session-types" }
+mona-tui-markdown = { path = "../mona-tui-markdown" }
+ratatui = "0.30"
+serde_json = "1"

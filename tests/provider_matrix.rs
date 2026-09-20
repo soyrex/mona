@@ -1,18 +1,18 @@
 use anyhow::Result;
-use jcode::auth::{AuthState, AuthStatus};
-use jcode::cli::provider_init::{
+use mona::auth::{AuthState, AuthStatus};
+use mona::cli::provider_init::{
     ProviderChoice, apply_login_provider_profile_env, choice_for_login_provider,
     init_provider_for_validation,
 };
-use jcode::provider::Provider;
-use jcode::provider_catalog::{
+use mona::provider::Provider;
+use mona::provider_catalog::{
     LoginProviderDescriptor, LoginProviderTarget, OPENAI_COMPAT_PROFILE, OpenAiCompatibleProfile,
     apply_openai_compatible_profile_env, load_api_key_from_env_or_config, login_providers,
     openai_compatible_profile_is_configured, openai_compatible_profiles,
     resolve_openai_compatible_profile, save_env_value_to_env_file,
     server_bootstrap_login_providers,
 };
-use jcode_provider_openrouter_runtime::OpenRouterProvider;
+use mona_provider_openrouter_runtime::OpenRouterProvider;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -29,32 +29,32 @@ fn lock_env() -> MutexGuard<'static, ()> {
 
 fn tracked_env_vars() -> Vec<String> {
     let mut keys: HashSet<String> = [
-        "JCODE_HOME",
+        "MONA_HOME",
         "XDG_CONFIG_HOME",
-        "JCODE_OPENROUTER_API_BASE",
-        "JCODE_OPENROUTER_API_KEY_NAME",
-        "JCODE_OPENROUTER_ENV_FILE",
-        "JCODE_OPENROUTER_CACHE_NAMESPACE",
-        "JCODE_OPENROUTER_PROVIDER_FEATURES",
-        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
-        "JCODE_OPENROUTER_PROVIDER",
-        "JCODE_OPENROUTER_NO_FALLBACK",
-        "JCODE_OPENROUTER_MODEL",
-        "JCODE_OPENROUTER_MODEL_CATALOG",
-        "JCODE_OPENROUTER_STATIC_MODELS",
-        "JCODE_OPENROUTER_AUTH_HEADER",
-        "JCODE_OPENROUTER_AUTH_HEADER_NAME",
-        "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
-        "JCODE_OPENROUTER_THINKING",
-        "JCODE_OPENAI_COMPAT_API_BASE",
-        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
-        "JCODE_OPENAI_COMPAT_ENV_FILE",
-        "JCODE_OPENAI_COMPAT_SETUP_URL",
-        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
-        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
-        "JCODE_NAMED_PROVIDER_PROFILE",
-        "JCODE_PROVIDER_PROFILE_ACTIVE",
-        "JCODE_PROVIDER_PROFILE_NAME",
+        "MONA_OPENROUTER_API_BASE",
+        "MONA_OPENROUTER_API_KEY_NAME",
+        "MONA_OPENROUTER_ENV_FILE",
+        "MONA_OPENROUTER_CACHE_NAMESPACE",
+        "MONA_OPENROUTER_PROVIDER_FEATURES",
+        "MONA_OPENROUTER_ALLOW_NO_AUTH",
+        "MONA_OPENROUTER_PROVIDER",
+        "MONA_OPENROUTER_NO_FALLBACK",
+        "MONA_OPENROUTER_MODEL",
+        "MONA_OPENROUTER_MODEL_CATALOG",
+        "MONA_OPENROUTER_STATIC_MODELS",
+        "MONA_OPENROUTER_AUTH_HEADER",
+        "MONA_OPENROUTER_AUTH_HEADER_NAME",
+        "MONA_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
+        "MONA_OPENROUTER_THINKING",
+        "MONA_OPENAI_COMPAT_API_BASE",
+        "MONA_OPENAI_COMPAT_API_KEY_NAME",
+        "MONA_OPENAI_COMPAT_ENV_FILE",
+        "MONA_OPENAI_COMPAT_SETUP_URL",
+        "MONA_OPENAI_COMPAT_DEFAULT_MODEL",
+        "MONA_OPENAI_COMPAT_LOCAL_ENABLED",
+        "MONA_NAMED_PROVIDER_PROFILE",
+        "MONA_PROVIDER_PROFILE_ACTIVE",
+        "MONA_PROVIDER_PROFILE_NAME",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
@@ -87,7 +87,7 @@ impl TestEnv {
     fn new() -> Result<Self> {
         let lock = lock_env();
         let temp = tempfile::Builder::new()
-            .prefix("jcode-provider-matrix-")
+            .prefix("mona-provider-matrix-")
             .tempdir()?;
         let saved = tracked_env_vars()
             .into_iter()
@@ -98,13 +98,13 @@ impl TestEnv {
             .collect::<Vec<_>>();
 
         for (key, _) in &saved {
-            jcode::env::remove_var(key);
+            mona::env::remove_var(key);
         }
 
-        let config_root = temp.path().join("config").join("jcode");
+        let config_root = temp.path().join("config").join("mona");
         std::fs::create_dir_all(&config_root)?;
-        jcode::env::set_var("JCODE_HOME", temp.path());
-        jcode::config::invalidate_config_cache();
+        mona::env::set_var("MONA_HOME", temp.path());
+        mona::config::invalidate_config_cache();
         apply_openai_compatible_profile_env(None);
         AuthStatus::invalidate_cache();
 
@@ -116,7 +116,7 @@ impl TestEnv {
     }
 
     fn config_dir(&self) -> PathBuf {
-        self.temp.path().join("config").join("jcode")
+        self.temp.path().join("config").join("mona")
     }
 
     fn config_file(&self) -> PathBuf {
@@ -124,9 +124,9 @@ impl TestEnv {
     }
 
     fn clear_profile_keys(&self) {
-        jcode::env::remove_var("OPENROUTER_API_KEY");
+        mona::env::remove_var("OPENROUTER_API_KEY");
         for profile in openai_compatible_profiles() {
-            jcode::env::remove_var(profile.api_key_env);
+            mona::env::remove_var(profile.api_key_env);
         }
         AuthStatus::invalidate_cache();
     }
@@ -136,16 +136,16 @@ impl Drop for TestEnv {
     fn drop(&mut self) {
         apply_openai_compatible_profile_env(None);
         AuthStatus::invalidate_cache();
-        jcode::config::invalidate_config_cache();
+        mona::config::invalidate_config_cache();
         for (key, value) in &self.saved {
             if let Some(value) = value {
-                jcode::env::set_var(key, value);
+                mona::env::set_var(key, value);
             } else {
-                jcode::env::remove_var(key);
+                mona::env::remove_var(key);
             }
         }
         AuthStatus::invalidate_cache();
-        jcode::config::invalidate_config_cache();
+        mona::config::invalidate_config_cache();
     }
 }
 
@@ -176,27 +176,27 @@ impl OpenAiCompatibleBaseState {
 
 fn clear_openai_compatible_runtime_env() {
     for key in [
-        "JCODE_OPENAI_COMPAT_API_BASE",
-        "JCODE_OPENAI_COMPAT_API_KEY_NAME",
-        "JCODE_OPENAI_COMPAT_ENV_FILE",
-        "JCODE_OPENAI_COMPAT_SETUP_URL",
-        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
-        "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
+        "MONA_OPENAI_COMPAT_API_BASE",
+        "MONA_OPENAI_COMPAT_API_KEY_NAME",
+        "MONA_OPENAI_COMPAT_ENV_FILE",
+        "MONA_OPENAI_COMPAT_SETUP_URL",
+        "MONA_OPENAI_COMPAT_DEFAULT_MODEL",
+        "MONA_OPENAI_COMPAT_LOCAL_ENABLED",
         "OPENAI_COMPAT_API_KEY",
-        "JCODE_OPENROUTER_API_BASE",
-        "JCODE_OPENROUTER_API_KEY_NAME",
-        "JCODE_OPENROUTER_ENV_FILE",
-        "JCODE_OPENROUTER_CACHE_NAMESPACE",
-        "JCODE_OPENROUTER_PROVIDER_FEATURES",
-        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
-        "JCODE_OPENROUTER_MODEL_CATALOG",
-        "JCODE_OPENROUTER_MODEL",
-        "JCODE_OPENROUTER_STATIC_MODELS",
-        "JCODE_PROVIDER_PROFILE_ACTIVE",
-        "JCODE_PROVIDER_PROFILE_NAME",
-        "JCODE_NAMED_PROVIDER_PROFILE",
+        "MONA_OPENROUTER_API_BASE",
+        "MONA_OPENROUTER_API_KEY_NAME",
+        "MONA_OPENROUTER_ENV_FILE",
+        "MONA_OPENROUTER_CACHE_NAMESPACE",
+        "MONA_OPENROUTER_PROVIDER_FEATURES",
+        "MONA_OPENROUTER_ALLOW_NO_AUTH",
+        "MONA_OPENROUTER_MODEL_CATALOG",
+        "MONA_OPENROUTER_MODEL",
+        "MONA_OPENROUTER_STATIC_MODELS",
+        "MONA_PROVIDER_PROFILE_ACTIVE",
+        "MONA_PROVIDER_PROFILE_NAME",
+        "MONA_NAMED_PROVIDER_PROFILE",
     ] {
-        jcode::env::remove_var(key);
+        mona::env::remove_var(key);
     }
     AuthStatus::invalidate_cache();
 }
@@ -249,7 +249,7 @@ fn write_profile_api_key_file(
     let path = env.config_dir().join(&resolved.env_file);
     std::fs::create_dir_all(env.config_dir())?;
     std::fs::write(&path, format!("{}={value}\n", resolved.api_key_env))?;
-    jcode::env::remove_var(&resolved.api_key_env);
+    mona::env::remove_var(&resolved.api_key_env);
     AuthStatus::invalidate_cache();
     Ok(())
 }
@@ -307,7 +307,7 @@ fn apply_competing_compatible_state(
                     env.config_file(),
                     format!("[provider]\ndefault_provider = \"{default_provider}\"\n"),
                 )?;
-                jcode::config::invalidate_config_cache();
+                mona::config::invalidate_config_cache();
             }
         }
     }
@@ -318,31 +318,31 @@ fn apply_competing_compatible_state(
 fn assert_runtime_profile_env(profile: OpenAiCompatibleProfile, context: &str) {
     let resolved = resolve_openai_compatible_profile(profile);
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_API_BASE").ok().as_deref(),
+        std::env::var("MONA_OPENROUTER_API_BASE").ok().as_deref(),
         Some(resolved.api_base.as_str()),
         "runtime api base mismatch for {context}"
     );
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_API_KEY_NAME")
+        std::env::var("MONA_OPENROUTER_API_KEY_NAME")
             .ok()
             .as_deref(),
         Some(resolved.api_key_env.as_str()),
         "runtime api key env mismatch for {context}"
     );
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_ENV_FILE").ok().as_deref(),
+        std::env::var("MONA_OPENROUTER_ENV_FILE").ok().as_deref(),
         Some(resolved.env_file.as_str()),
         "runtime env file mismatch for {context}"
     );
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_CACHE_NAMESPACE")
+        std::env::var("MONA_OPENROUTER_CACHE_NAMESPACE")
             .ok()
             .as_deref(),
         Some(resolved.id.as_str()),
         "runtime cache namespace mismatch for {context}"
     );
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_ALLOW_NO_AUTH")
+        std::env::var("MONA_OPENROUTER_ALLOW_NO_AUTH")
             .ok()
             .as_deref(),
         (!resolved.requires_api_key).then_some("1"),
@@ -352,16 +352,16 @@ fn assert_runtime_profile_env(profile: OpenAiCompatibleProfile, context: &str) {
 
 fn assert_no_compatible_runtime_profile_env(context: &str) {
     for key in [
-        "JCODE_OPENROUTER_API_BASE",
-        "JCODE_OPENROUTER_API_KEY_NAME",
-        "JCODE_OPENROUTER_ENV_FILE",
-        "JCODE_OPENROUTER_CACHE_NAMESPACE",
-        "JCODE_OPENROUTER_PROVIDER_FEATURES",
-        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
-        "JCODE_OPENROUTER_STATIC_MODELS",
-        "JCODE_PROVIDER_PROFILE_ACTIVE",
-        "JCODE_PROVIDER_PROFILE_NAME",
-        "JCODE_NAMED_PROVIDER_PROFILE",
+        "MONA_OPENROUTER_API_BASE",
+        "MONA_OPENROUTER_API_KEY_NAME",
+        "MONA_OPENROUTER_ENV_FILE",
+        "MONA_OPENROUTER_CACHE_NAMESPACE",
+        "MONA_OPENROUTER_PROVIDER_FEATURES",
+        "MONA_OPENROUTER_ALLOW_NO_AUTH",
+        "MONA_OPENROUTER_STATIC_MODELS",
+        "MONA_PROVIDER_PROFILE_ACTIVE",
+        "MONA_PROVIDER_PROFILE_NAME",
+        "MONA_NAMED_PROVIDER_PROFILE",
     ] {
         assert!(
             std::env::var_os(key).is_none(),
@@ -373,8 +373,8 @@ fn assert_no_compatible_runtime_profile_env(context: &str) {
 
 fn assert_no_active_compatible_profile_lock(context: &str) {
     for key in [
-        "JCODE_PROVIDER_PROFILE_ACTIVE",
-        "JCODE_PROVIDER_PROFILE_NAME",
+        "MONA_PROVIDER_PROFILE_ACTIVE",
+        "MONA_PROVIDER_PROFILE_NAME",
     ] {
         assert!(
             std::env::var_os(key).is_none(),
@@ -387,23 +387,23 @@ fn assert_no_active_compatible_profile_lock(context: &str) {
 fn seed_non_compatible_auto_auth(provider: LoginProviderDescriptor) -> bool {
     match provider.target {
         LoginProviderTarget::Claude => {
-            jcode::env::set_var("ANTHROPIC_API_KEY", "test-anthropic-key");
+            mona::env::set_var("ANTHROPIC_API_KEY", "test-anthropic-key");
             true
         }
         LoginProviderTarget::OpenAiApiKey => {
-            jcode::env::set_var("OPENAI_API_KEY", "sk-test-openai-key");
+            mona::env::set_var("OPENAI_API_KEY", "sk-test-openai-key");
             true
         }
         LoginProviderTarget::OpenRouter => {
-            jcode::env::set_var("OPENROUTER_API_KEY", "sk-test-openrouter-key");
+            mona::env::set_var("OPENROUTER_API_KEY", "sk-test-openrouter-key");
             true
         }
         LoginProviderTarget::Copilot => {
-            jcode::env::set_var("COPILOT_GITHUB_TOKEN", "gho_test-copilot-token");
+            mona::env::set_var("COPILOT_GITHUB_TOKEN", "gho_test-copilot-token");
             true
         }
         LoginProviderTarget::Cursor => {
-            jcode::env::set_var("CURSOR_API_KEY", "sk-test-cursor-key");
+            mona::env::set_var("CURSOR_API_KEY", "sk-test-cursor-key");
             true
         }
         _ => false,
@@ -635,7 +635,7 @@ fn provider_matrix_openai_compatible_auth_state_space_material_states_preserve_l
                         OpenAiCompatibleBaseState::SavedRemote
                         | OpenAiCompatibleBaseState::SavedLocal => {
                             save_env_value_to_env_file(
-                                "JCODE_OPENAI_COMPAT_API_BASE",
+                                "MONA_OPENAI_COMPAT_API_BASE",
                                 env_file,
                                 Some(base_state.expected_api_base()),
                             )?;
@@ -652,7 +652,7 @@ fn provider_matrix_openai_compatible_auth_state_space_material_states_preserve_l
 
                     if has_default_model {
                         save_env_value_to_env_file(
-                            "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+                            "MONA_OPENAI_COMPAT_DEFAULT_MODEL",
                             env_file,
                             Some(&model),
                         )?;
@@ -699,31 +699,31 @@ fn provider_matrix_openai_compatible_auth_state_space_material_states_preserve_l
                     apply_openai_compatible_profile_env(Some(OPENAI_COMPAT_PROFILE));
                     AuthStatus::invalidate_cache();
                     assert_eq!(
-                        std::env::var("JCODE_OPENROUTER_API_BASE").ok().as_deref(),
+                        std::env::var("MONA_OPENROUTER_API_BASE").ok().as_deref(),
                         Some(resolved.api_base.as_str()),
                         "runtime api base mismatch for {state_label}"
                     );
                     assert_eq!(
-                        std::env::var("JCODE_OPENROUTER_API_KEY_NAME")
+                        std::env::var("MONA_OPENROUTER_API_KEY_NAME")
                             .ok()
                             .as_deref(),
                         Some(resolved.api_key_env.as_str()),
                         "runtime api key env mismatch for {state_label}"
                     );
                     assert_eq!(
-                        std::env::var("JCODE_OPENROUTER_ENV_FILE").ok().as_deref(),
+                        std::env::var("MONA_OPENROUTER_ENV_FILE").ok().as_deref(),
                         Some(resolved.env_file.as_str()),
                         "runtime env file mismatch for {state_label}"
                     );
                     assert_eq!(
-                        std::env::var("JCODE_OPENROUTER_ALLOW_NO_AUTH")
+                        std::env::var("MONA_OPENROUTER_ALLOW_NO_AUTH")
                             .ok()
                             .as_deref(),
                         (base_state == OpenAiCompatibleBaseState::SavedLocal).then_some("1"),
                         "runtime no-auth flag mismatch for {state_label}"
                     );
                     assert_eq!(
-                        jcode::provider::openrouter::has_credentials(),
+                        mona::provider::openrouter::has_credentials(),
                         expected_configured,
                         "runtime credentials mismatch for {state_label}"
                     );
@@ -778,37 +778,37 @@ fn provider_matrix_env_credentials_activate_openrouter_runtime() -> Result<()> {
         env.clear_profile_keys();
         apply_openai_compatible_profile_env(Some(profile));
         let resolved = resolve_openai_compatible_profile(profile);
-        jcode::env::set_var(&resolved.api_key_env, "matrix-env-secret");
+        mona::env::set_var(&resolved.api_key_env, "matrix-env-secret");
         AuthStatus::invalidate_cache();
 
         assert_eq!(
-            std::env::var("JCODE_OPENROUTER_API_BASE").ok().as_deref(),
+            std::env::var("MONA_OPENROUTER_API_BASE").ok().as_deref(),
             Some(resolved.api_base.as_str())
         );
         assert_eq!(
-            std::env::var("JCODE_OPENROUTER_API_KEY_NAME")
+            std::env::var("MONA_OPENROUTER_API_KEY_NAME")
                 .ok()
                 .as_deref(),
             Some(resolved.api_key_env.as_str())
         );
         assert_eq!(
-            std::env::var("JCODE_OPENROUTER_ENV_FILE").ok().as_deref(),
+            std::env::var("MONA_OPENROUTER_ENV_FILE").ok().as_deref(),
             Some(resolved.env_file.as_str())
         );
         assert_eq!(
-            std::env::var("JCODE_OPENROUTER_CACHE_NAMESPACE")
+            std::env::var("MONA_OPENROUTER_CACHE_NAMESPACE")
                 .ok()
                 .as_deref(),
             Some(resolved.id.as_str())
         );
         assert_eq!(
-            std::env::var("JCODE_OPENROUTER_PROVIDER_FEATURES")
+            std::env::var("MONA_OPENROUTER_PROVIDER_FEATURES")
                 .ok()
                 .as_deref(),
             Some("0")
         );
         assert!(
-            jcode::provider::openrouter::has_credentials(),
+            mona::provider::openrouter::has_credentials(),
             "expected credentials for {}",
             resolved.id
         );
@@ -819,7 +819,7 @@ fn provider_matrix_env_credentials_activate_openrouter_runtime() -> Result<()> {
             "direct compatible runtime must not report native OpenRouter auth"
         );
 
-        jcode::env::remove_var(&resolved.api_key_env);
+        mona::env::remove_var(&resolved.api_key_env);
     }
 
     Ok(())
@@ -841,7 +841,7 @@ fn provider_matrix_file_credentials_activate_openrouter_runtime() -> Result<()> 
         AuthStatus::invalidate_cache();
 
         assert!(
-            jcode::provider::openrouter::has_credentials(),
+            mona::provider::openrouter::has_credentials(),
             "expected file credentials for {}",
             resolved.id
         );
@@ -863,13 +863,13 @@ fn provider_matrix_custom_compat_overrides_flow_into_runtime() -> Result<()> {
     let env = TestEnv::new()?;
     env.clear_profile_keys();
 
-    jcode::env::set_var(
-        "JCODE_OPENAI_COMPAT_API_BASE",
+    mona::env::set_var(
+        "MONA_OPENAI_COMPAT_API_BASE",
         "https://api.groq.com/openai/v1/",
     );
-    jcode::env::set_var("JCODE_OPENAI_COMPAT_API_KEY_NAME", "GROQ_API_KEY");
-    jcode::env::set_var("JCODE_OPENAI_COMPAT_ENV_FILE", "groq.env");
-    jcode::env::set_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL", "openai/gpt-oss-120b");
+    mona::env::set_var("MONA_OPENAI_COMPAT_API_KEY_NAME", "GROQ_API_KEY");
+    mona::env::set_var("MONA_OPENAI_COMPAT_ENV_FILE", "groq.env");
+    mona::env::set_var("MONA_OPENAI_COMPAT_DEFAULT_MODEL", "openai/gpt-oss-120b");
 
     apply_openai_compatible_profile_env(Some(OPENAI_COMPAT_PROFILE));
     let resolved = resolve_openai_compatible_profile(OPENAI_COMPAT_PROFILE);
@@ -884,20 +884,20 @@ fn provider_matrix_custom_compat_overrides_flow_into_runtime() -> Result<()> {
     assert_eq!(resolved.api_key_env, "GROQ_API_KEY");
     assert_eq!(resolved.env_file, "groq.env");
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_API_BASE").ok().as_deref(),
+        std::env::var("MONA_OPENROUTER_API_BASE").ok().as_deref(),
         Some("https://api.groq.com/openai/v1")
     );
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_API_KEY_NAME")
+        std::env::var("MONA_OPENROUTER_API_KEY_NAME")
             .ok()
             .as_deref(),
         Some("GROQ_API_KEY")
     );
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_ENV_FILE").ok().as_deref(),
+        std::env::var("MONA_OPENROUTER_ENV_FILE").ok().as_deref(),
         Some("groq.env")
     );
-    assert!(jcode::provider::openrouter::has_credentials());
+    assert!(mona::provider::openrouter::has_credentials());
     OpenRouterProvider::new()?;
     assert_eq!(
         AuthStatus::check().openrouter,
@@ -914,7 +914,7 @@ fn provider_matrix_custom_local_compat_without_api_key_activates_openrouter_runt
     let env = TestEnv::new()?;
     env.clear_profile_keys();
 
-    jcode::env::set_var("JCODE_OPENAI_COMPAT_API_BASE", "http://localhost:11434/v1");
+    mona::env::set_var("MONA_OPENAI_COMPAT_API_BASE", "http://localhost:11434/v1");
 
     apply_openai_compatible_profile_env(Some(OPENAI_COMPAT_PROFILE));
     let resolved = resolve_openai_compatible_profile(OPENAI_COMPAT_PROFILE);
@@ -923,12 +923,12 @@ fn provider_matrix_custom_local_compat_without_api_key_activates_openrouter_runt
     assert_eq!(resolved.api_base, "http://localhost:11434/v1");
     assert!(!resolved.requires_api_key);
     assert_eq!(
-        std::env::var("JCODE_OPENROUTER_ALLOW_NO_AUTH")
+        std::env::var("MONA_OPENROUTER_ALLOW_NO_AUTH")
             .ok()
             .as_deref(),
         Some("1")
     );
-    assert!(jcode::provider::openrouter::has_credentials());
+    assert!(mona::provider::openrouter::has_credentials());
     OpenRouterProvider::new()?;
     assert_eq!(
         AuthStatus::check().openrouter,

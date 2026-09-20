@@ -20,7 +20,7 @@
     "Antigravity self-heals the missing thought_signature dead-end instead of getting stuck",
     "A home-directory subscribe no longer clobbers the working directory of a project session",
     "Kimi ids with an explicit -256k suffix resolve to 256K instead of the family default",
-    "JCODE_TOOL_CALL_DETAILS now invalidates the cached config when it changes",
+    "MONA_TOOL_CALL_DETAILS now invalidates the cached config when it changes",
     "Fuzzy matching no longer rejects late matches because of the positional penalty"
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "name": "jcode-sdk-demo-app",
+  "name": "mona-sdk-demo-app",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "start": "node index.mjs"
   },
   "dependencies": {
-    "@1jehuang/jcode-sdk": "^1.0.0"
+    "@1jehuang/mona-sdk": "^1.0.0"
   },
   "engines": {
     "node": ">=20"

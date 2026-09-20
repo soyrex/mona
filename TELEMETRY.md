@@ -43,7 +43,7 @@ quality evaluation. Transcript data must not be sold or shared with unrelated
 third parties.
 
 Disable transcript sharing at any time from `/telemetry` by selecting **No
-prompts or transcripts** or **Send nothing**. `JCODE_NO_TELEMETRY` and
+prompts or transcripts** or **Send nothing**. `MONA_NO_TELEMETRY` and
 `DO_NOT_TRACK` override the content setting and prevent uploads.
 
 Recent telemetry additions also include: coarse onboarding steps, explicit thumbs-up / thumbs-down feedback, build-channel / dev-mode cleanup flags, session/workflow/tool-category summaries, coarse project language buckets, retention helpers like active days in the last 7 / 30 days, workflow cadence fields for session timing and multi-sessioning, privacy-safe per-turn timing/outcome metrics, schema v5 agent-time / autonomy / pain-attribution metrics, and numeric-only todo progress aggregates.
@@ -110,7 +110,7 @@ approval. Jcode does not attach transcript content, repository files, or paths.
 ### Sponsored Discovery Event
 
 One event is sent after each `discover_tools` attempt. A random per-request ID
-is also sent to the discovery API as the `x-jcode-discovery-request-id` header,
+is also sent to the discovery API as the `x-mona-discovery-request-id` header,
 allowing client reliability telemetry to be correlated with server request logs
 without exposing prompts or a persistent telemetry identifier to that service.
 
@@ -136,12 +136,12 @@ paths, and tool setup instructions are **not** included in telemetry. The
 backend rejects unknown phase, outcome, and failure labels rather than storing
 arbitrary strings.
 
-The benchmark runner sets `JCODE_DISCOVERY_BENCHMARK=1`. Discovery requests then
-carry `x-jcode-discovery-benchmark: 1`, and the corresponding telemetry event has
+The benchmark runner sets `MONA_DISCOVERY_BENCHMARK=1`. Discovery requests then
+carry `x-mona-discovery-benchmark: 1`, and the corresponding telemetry event has
 `benchmark_run: true`.
 
 When telemetry is enabled, discovery API requests also carry
-`x-jcode-session-correlation-id`. It is a fresh random UUID for the current
+`x-mona-session-correlation-id`. It is a fresh random UUID for the current
 runtime session, is not derived from the persistent telemetry ID, and is never
 reused across sessions. The same UUID appears on the numeric-only Todo Session
 event below. When telemetry is disabled, this header is omitted.
@@ -162,9 +162,9 @@ are absent, so the event is joinable to discovery requests from that session but
 not to an install, account, or another session.
 
 That join is not yet possible in practice. The discovery service stores its rows
-in the `jcode-subscriptions` D1 while this event lands in `jcode-telemetry`, and
+in the `mona-subscriptions` D1 while this event lands in `mona-telemetry`, and
 nothing on the receiving side reads
-`x-jcode-session-correlation-id` yet, so the header is currently sent and
+`x-mona-session-correlation-id` yet, so the header is currently sent and
 discarded. The correlation design is what makes the join possible later; it does
 not by itself make the number available.
 
@@ -331,11 +331,11 @@ Most events also carry a few coarse quality / cleanup fields:
 | `is_ci` | `true/false` | Filter CI noise |
 | `ran_from_cargo` | `true/false` | Filter local dev launches |
 
-CI/CD jobs should set `JCODE_CI=1` when running jcode. `JCODE_CI=0` explicitly
+CI/CD jobs should set `MONA_CI=1` when running jcode. `MONA_CI=0` explicitly
 marks a run as non-CI and overrides inherited provider variables. When this
 setting is absent, jcode falls back to common provider markers such as `CI`,
 `GITHUB_ACTIONS`, `GITLAB_CI`, and `BUILDKITE`. Build provenance is independent:
-official release workflows set `JCODE_CI_BUILD=1` while compiling, producing the
+official release workflows set `MONA_CI_BUILD=1` while compiling, producing the
 `ci_release` channel without classifying later end-user executions as CI.
 
 ## What We Do NOT Collect
@@ -366,7 +366,7 @@ code, and timezone are never read or stored. It is stored as a per-day
 aggregate (`country_daily` counts) plus a `last_country` column on the daily
 active-user rollup. Unknown (`XX`) and Tor (`T1`) codes are discarded.
 
-The UUID is randomly generated on first run and stored at `~/.jcode/telemetry_id`. It is not derived from your machine, username, email, or any identifiable information.
+The UUID is randomly generated on first run and stored at `~/.mona/telemetry_id`. It is not derived from your machine, username, email, or any identifiable information.
 
 ## How We Use and Share Data
 
@@ -422,20 +422,20 @@ jcode telemetry status --json
 jcode telemetry enable
 
 # Option 2: Environment variable
-export JCODE_NO_TELEMETRY=1
+export MONA_NO_TELEMETRY=1
 
 # Option 3: Standard DO_NOT_TRACK (https://consoledonottrack.com/)
 export DO_NOT_TRACK=1
 
 # Option 4: File-based opt-out
-touch ~/.jcode/no_telemetry
+touch ~/.mona/no_telemetry
 ```
 
 When opted out, zero network requests are made. The telemetry module short-circuits immediately.
 
 ## Verification
 
-This is open source. The telemetry implementation is in [`crates/jcode-telemetry-core/src/`](./crates/jcode-telemetry-core/src/) - you can read exactly what gets sent. There are no other network calls related to telemetry anywhere in the codebase.
+This is open source. The telemetry implementation is in [`crates/mona-telemetry-core/src/`](./crates/mona-telemetry-core/src/) - you can read exactly what gets sent. There are no other network calls related to telemetry anywhere in the codebase.
 
 ## Data Retention
 

@@ -62,7 +62,7 @@ def main() -> int:
     results = collect_results(jobs_dir)
 
     rows = []
-    jcode_resolved = jcode_trials = 0
+    mona_resolved = mona_trials = 0
     regressions = []
     for task in sorted(set(baseline) | set(results)):
         rewards = results.get(task, [])
@@ -70,8 +70,8 @@ def main() -> int:
         passed = sum(1 for r in rewards if r >= 1.0)
         rate = (100.0 * passed / n) if n else None
         base = baseline.get(task)
-        jcode_resolved += passed
-        jcode_trials += n
+        mona_resolved += passed
+        mona_trials += n
         flag = ""
         if rate is not None and base is not None:
             if rate < base:
@@ -90,8 +90,8 @@ def main() -> int:
         print(f"{task:38} {base_s:>7} {rate_s:>7} {pass_s:>6} {flag}")
 
     print("-" * 75)
-    if jcode_trials:
-        print(f"jcode micro-avg: {jcode_resolved}/{jcode_trials} = {100*jcode_resolved/jcode_trials:.1f}%")
+    if mona_trials:
+        print(f"jcode micro-avg: {mona_resolved}/{mona_trials} = {100*mona_resolved/mona_trials:.1f}%")
     base_resolved = sum(baseline.values())
     print(f"baseline macro-avg: {base_resolved/len(baseline):.1f}% (CC+Opus4.8)")
     if regressions:

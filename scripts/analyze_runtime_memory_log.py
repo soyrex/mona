@@ -124,7 +124,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("paths", nargs="*", help="Specific JSONL files or directories to analyze")
     parser.add_argument(
         "--log-dir",
-        help="Directory containing runtime memory JSONL logs (default: ~/.jcode/logs/memory or $JCODE_HOME/logs/memory)",
+        help="Directory containing runtime memory JSONL logs (default: ~/.mona/logs/memory or $MONA_HOME/logs/memory)",
     )
     parser.add_argument("--days", type=int, default=None, help="Only include files from the last N daily logs")
     parser.add_argument("--top", type=int, default=DEFAULT_TOP_N, help="How many spikes/sessions/deltas to show")
@@ -154,9 +154,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def default_log_dir() -> Path:
-    jcode_home = os.environ.get("JCODE_HOME")
-    if jcode_home:
-        return Path(jcode_home).expanduser() / "logs" / "memory"
+    mona_home = os.environ.get("MONA_HOME")
+    if mona_home:
+        return Path(mona_home).expanduser() / "logs" / "memory"
     return Path.home() / ".jcode" / "logs" / "memory"
 
 
@@ -781,7 +781,7 @@ def build_incident_assessment(
                 "action": "Use a jemalloc-prof build and heap dump if coverage remains below 50%.",
                 "commands": [
                     "jcode debug 'allocator:profile:on'",
-                    "jcode debug 'allocator:profile:dump /tmp/jcode-server.heap'",
+                    "jcode debug 'allocator:profile:dump /tmp/mona-server.heap'",
                 ],
             },
         ]

@@ -16,13 +16,13 @@ import repro_input_flicker as R  # noqa: E402
 
 
 def main() -> int:
-    root = Path(tempfile.mkdtemp(prefix="jcode-echo-"))
+    root = Path(tempfile.mkdtemp(prefix="mona-echo-"))
     run = root / "run"
     run.mkdir(parents=True)
     env = os.environ.copy()
-    env["JCODE_SOCKET"] = "/run/user/1000/jcode.sock"
-    env["JCODE_DEBUG_CONTROL"] = "1"
-    dbg = Path("/run/user/1000/jcode-debug.sock")
+    env["MONA_SOCKET"] = "/run/user/1000/jcode.sock"
+    env["MONA_DEBUG_CONTROL"] = "1"
+    dbg = Path("/run/user/1000/mona-debug.sock")
     cmd_p, resp_p = run / "cmd", run / "resp"
 
     binary = sys.argv[1] if len(sys.argv) > 1 else "./target/selfdev/jcode"

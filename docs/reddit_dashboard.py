@@ -305,6 +305,6 @@ for key, cell in table.get_celld().items():
 
 ax7.set_title('COMPLETE POSTING STRATEGY', fontsize=18, fontweight='bold', pad=20, color='#58a6ff')
 
-plt.savefig('/tmp/jcode_reddit_dashboard.png', dpi=150, bbox_inches='tight',
+plt.savefig('/tmp/mona_reddit_dashboard.png', dpi=150, bbox_inches='tight',
             facecolor='#0d1117', edgecolor='none')
-print("Saved to /tmp/jcode_reddit_dashboard.png")
+print("Saved to /tmp/mona_reddit_dashboard.png")

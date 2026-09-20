@@ -63,15 +63,15 @@ class MockSponsorEndToEndTests(unittest.TestCase):
 
     def test_cli_flag_survives_magic_link_and_is_persisted(self):
         email = "attributed@example.test"
-        link = self.signup_and_confirm(email, "jcode-discovery")
-        self.assertNotIn("jcode-discovery", link, "source should be inside signed state, not a mutable query field")
-        self.assertEqual(self.account(email)["acquisition_source"], "jcode-discovery")
+        link = self.signup_and_confirm(email, "mona-discovery")
+        self.assertNotIn("mona-discovery", link, "source should be inside signed state, not a mutable query field")
+        self.assertEqual(self.account(email)["acquisition_source"], "mona-discovery")
 
     def test_first_acquisition_source_is_immutable(self):
         email = "immutable@example.test"
-        self.signup_and_confirm(email, "jcode-discovery")
+        self.signup_and_confirm(email, "mona-discovery")
         self.signup_and_confirm(email, "other-partner")
-        self.assertEqual(self.account(email)["acquisition_source"], "jcode-discovery")
+        self.assertEqual(self.account(email)["acquisition_source"], "mona-discovery")
 
     def test_omitted_flag_creates_unattributed_account(self):
         email = "organic@example.test"
@@ -80,7 +80,7 @@ class MockSponsorEndToEndTests(unittest.TestCase):
 
     def test_tampered_magic_link_is_rejected(self):
         result = self.cli(
-            "signup", "--service", self.url, "--email", "tamper@example.test", "--via", "jcode-discovery"
+            "signup", "--service", self.url, "--email", "tamper@example.test", "--via", "mona-discovery"
         )
         link = result.stdout.strip()
         parsed = urllib.parse.urlsplit(link)
@@ -94,13 +94,13 @@ class MockSponsorEndToEndTests(unittest.TestCase):
         self.assertIn("invalid signup token", failed.stderr)
 
     def test_magic_link_is_one_time_use(self):
-        link = self.signup_and_confirm("once@example.test", "jcode-discovery")
+        link = self.signup_and_confirm("once@example.test", "mona-discovery")
         failed = self.cli("confirm", link, check=False)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("already consumed", failed.stderr)
 
     def test_expired_token_is_rejected(self):
-        token = mock.encode_token({"email": "old@example.test", "via": "jcode-discovery", "exp": 1}, SECRET)
+        token = mock.encode_token({"email": "old@example.test", "via": "mona-discovery", "exp": 1}, SECRET)
         with self.assertRaisesRegex(ValueError, "expired"):
             mock.decode_token(token, SECRET, now=2)
 
@@ -108,13 +108,13 @@ class MockSponsorEndToEndTests(unittest.TestCase):
         sponsor_file = Path(self.temp.name) / "mock-sponsors.json"
         sponsor_file.write_text(json.dumps({
             "version": 1,
-            "default_marker": "via=jcode-discovery",
+            "default_marker": "via=mona-discovery",
             "sponsors": [{
                 "tool": "mock-sponsor",
                 "category": "payments",
                 "mechanism": "cli-flag",
-                "marker": "--via jcode-discovery",
-                "listing_marker": "via=jcode-discovery",
+                "marker": "--via mona-discovery",
+                "listing_marker": "via=mona-discovery",
             }],
         }))
         report_file = Path(self.temp.name) / "benchmark-report.json"
@@ -157,7 +157,7 @@ class MockSponsorEndToEndTests(unittest.TestCase):
         magic_link = signup.stdout.strip()
         confirmed = json.loads(self.cli("confirm", magic_link).stdout)
         self.assertTrue(confirmed["confirmed"])
-        self.assertEqual(self.account(email)["acquisition_source"], "jcode-discovery")
+        self.assertEqual(self.account(email)["acquisition_source"], "mona-discovery")
 
 
 if __name__ == "__main__":

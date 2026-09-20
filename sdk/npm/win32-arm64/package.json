@@ -1,5 +1,5 @@
 {
-  "name": "@1jehuang/jcode-win32-arm64",
+  "name": "@1jehuang/mona-win32-arm64",
   "version": "1.2.0",
   "description": "Jcode runtime binary for win32 arm64",
   "license": "MIT",

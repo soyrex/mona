@@ -27,9 +27,9 @@ pub(crate) enum ProviderAuthArg {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "jcode")]
-#[command(version = jcode_build_meta::version())]
-#[command(about = "J-Code: A coding agent using Claude Max or ChatGPT Pro subscriptions")]
+#[command(name = "mona")]
+#[command(version = mona_build_meta::version())]
+#[command(about = "mona: Monitter-owned ACP harness (forked from jcode). Run `mona acp` to start an Agent Client Protocol stdio server.")]
 pub(crate) struct Args {
     /// Initial provider to use (jcode, claude, openai, openai-api, openrouter, azure, opencode, opencode-go, zai, 302ai, baseten, conifer, cortecs, comtegra, deepseek, fpt, firmware, huggingface, moonshotai, nebius, scaleway, stackit, groq, mistral, perplexity, togetherai, deepinfra, xai, grok-build, nvidia-nim, lmstudio, ollama, chutes, cerebras, alibaba-coding-plan, openai-compatible, cursor, copilot, gemini, antigravity, google, or auto-detect). Interactive sessions can switch providers with /model.
     #[arg(short, long, default_value = "auto", global = true)]
@@ -569,14 +569,14 @@ pub(crate) enum Command {
 
     /// Serve the stable harness API on a Unix socket, for SDK clients.
     ///
-    /// This is the endpoint the TypeScript SDK (`@1jehuang/jcode-sdk`) connects to. It
+    /// This is the endpoint the TypeScript SDK (`@1jehuang/mona-sdk`) connects to. It
     /// ships in the released binary on purpose: the API is only "generally
     /// available" if reaching it does not require a Rust toolchain and a
     /// source checkout.
     #[cfg(unix)]
     #[command(name = "api-bridge", alias = "api")]
     ApiBridge {
-        /// Path of the API socket to listen on (default: $XDG_RUNTIME_DIR/jcode-api.sock)
+        /// Path of the API socket to listen on (default: $XDG_RUNTIME_DIR/mona-api.sock)
         ///
         /// Named `--api-socket` rather than `--socket` because the global
         /// `--socket` already selects the *internal daemon* socket, and clap
@@ -756,7 +756,7 @@ pub(crate) enum CloudSessionsCommand {
     /// Upload the newest local Jcode session to Jade cloud storage
     UploadLatest {
         /// Directory containing local Jcode session JSON files
-        #[arg(long, default_value = "~/.jcode/sessions")]
+        #[arg(long, default_value = "~/.mona/sessions")]
         sessions_dir: String,
 
         /// Upload without Jade's redaction pass
@@ -769,7 +769,7 @@ pub(crate) enum CloudSessionsCommand {
 
     /// Sync new or changed local sessions to Jade cloud storage (idempotent; safe to schedule)
     Sync {
-        /// Directory containing local Jcode session JSON files (default: ~/.jcode/sessions)
+        /// Directory containing local Jcode session JSON files (default: ~/.mona/sessions)
         #[arg(long)]
         sessions_dir: Option<String>,
 
@@ -890,7 +890,7 @@ pub(crate) struct JadeCloudOptions {
     #[arg(long)]
     pub(crate) region: Option<String>,
 
-    /// Path to the private Jade session helper. Defaults to $JCODE_JADE_SESSIONS_HELPER or ~/jade/scripts/jade_sessions.py.
+    /// Path to the private Jade session helper. Defaults to $MONA_JADE_SESSIONS_HELPER or ~/jade/scripts/jade_sessions.py.
     #[arg(long)]
     pub(crate) helper: Option<String>,
 }

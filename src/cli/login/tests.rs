@@ -4,9 +4,9 @@ use super::*;
 fn novita_login_saves_private_key_and_rejects_empty_replacement() {
     let _guard = crate::storage::lock_test_env();
     let temp = tempfile::TempDir::new().unwrap();
-    let prev_home = std::env::var_os("JCODE_HOME");
+    let prev_home = std::env::var_os("MONA_HOME");
     let prev_key = std::env::var_os("NOVITA_API_KEY");
-    crate::env::set_var("JCODE_HOME", temp.path());
+    crate::env::set_var("MONA_HOME", temp.path());
     let profile = crate::provider_catalog::NOVITA_PROFILE;
     login_openai_compatible_flow(
         &profile,
@@ -41,7 +41,7 @@ fn novita_login_saves_private_key_and_rejects_empty_replacement() {
     assert!(err.to_string().contains("No API key provided"));
     assert_eq!(std::fs::read_to_string(path).unwrap(), saved);
     set_or_clear_env("NOVITA_API_KEY", prev_key);
-    set_or_clear_env("JCODE_HOME", prev_home);
+    set_or_clear_env("MONA_HOME", prev_home);
 }
 
 fn set_or_clear_env(key: &str, value: Option<std::ffi::OsString>) {
@@ -72,8 +72,8 @@ fn scriptable_resume_command_matches_input_kind() {
 fn load_pending_login_removes_expired_record() {
     let _guard = crate::storage::lock_test_env();
     let temp = tempfile::TempDir::new().expect("temp dir");
-    let prev_home = std::env::var_os("JCODE_HOME");
-    crate::env::set_var("JCODE_HOME", temp.path());
+    let prev_home = std::env::var_os("MONA_HOME");
+    crate::env::set_var("MONA_HOME", temp.path());
 
     let path = pending_login_path("openai", None).expect("pending path");
     let record = PendingScriptableLoginRecord {
@@ -91,15 +91,15 @@ fn load_pending_login_removes_expired_record() {
     assert!(err.to_string().contains("expired"));
     assert!(!path.exists(), "expired pending login should be removed");
 
-    set_or_clear_env("JCODE_HOME", prev_home);
+    set_or_clear_env("MONA_HOME", prev_home);
 }
 
 #[test]
 fn load_pending_login_accepts_legacy_format() {
     let _guard = crate::storage::lock_test_env();
     let temp = tempfile::TempDir::new().expect("temp dir");
-    let prev_home = std::env::var_os("JCODE_HOME");
-    crate::env::set_var("JCODE_HOME", temp.path());
+    let prev_home = std::env::var_os("MONA_HOME");
+    crate::env::set_var("MONA_HOME", temp.path());
 
     let path = pending_login_path("gemini", None).expect("pending path");
     let legacy = PendingScriptableLogin::Gemini {
@@ -120,7 +120,7 @@ fn load_pending_login_accepts_legacy_format() {
         other => panic!("unexpected login variant: {:?}", other),
     }
 
-    set_or_clear_env("JCODE_HOME", prev_home);
+    set_or_clear_env("MONA_HOME", prev_home);
 }
 
 #[test]
@@ -225,15 +225,15 @@ struct ScopedLoginTestHome(Option<std::ffi::OsString>);
 
 impl ScopedLoginTestHome {
     fn new(path: &Path) -> Self {
-        let previous = std::env::var_os("JCODE_HOME");
-        crate::env::set_var("JCODE_HOME", path);
+        let previous = std::env::var_os("MONA_HOME");
+        crate::env::set_var("MONA_HOME", path);
         Self(previous)
     }
 }
 
 impl Drop for ScopedLoginTestHome {
     fn drop(&mut self) {
-        set_or_clear_env("JCODE_HOME", self.0.take());
+        set_or_clear_env("MONA_HOME", self.0.take());
     }
 }
 

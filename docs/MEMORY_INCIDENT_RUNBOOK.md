@@ -37,7 +37,7 @@ Preserve the JSON output in the incident notes before changing state.
 Runtime memory logging is enabled by default and writes daily JSONL files under:
 
 ```text
-~/.jcode/logs/memory/
+~/.mona/logs/memory/
 ```
 
 Analyze the latest server process lifetime:
@@ -60,7 +60,7 @@ Prefer `--instance` for postmortems. It preserves one coherent process lifetime 
 For machine-readable output:
 
 ```bash
-python scripts/analyze_runtime_memory_log.py --days 1 --json > /tmp/jcode-memory-analysis.json
+python scripts/analyze_runtime_memory_log.py --days 1 --json > /tmp/mona-memory-analysis.json
 ```
 
 ## Severity thresholds
@@ -145,7 +145,7 @@ Actions:
 
 ```bash
 jcode debug 'allocator:profile:on'
-jcode debug 'allocator:profile:dump /tmp/jcode-server.heap'
+jcode debug 'allocator:profile:dump /tmp/mona-server.heap'
 ```
 
 The normal system-allocator build cannot produce allocation-stack profiles. Do not claim heap ownership from RSS alone.

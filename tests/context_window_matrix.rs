@@ -31,7 +31,7 @@
 //!
 //! Everything here is offline and hermetic: no network, no live catalog.
 
-use jcode_provider_core::{
+use mona_provider_core::{
     DEFAULT_CONTEXT_LIMIT, context_limit_for_model_with_provider,
     context_limit_for_model_with_provider_and_cache,
 };

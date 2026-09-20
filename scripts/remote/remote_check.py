@@ -45,7 +45,7 @@ def main():
     p.add_argument("--port", type=int, default=7643)
     p.add_argument("--code", help="pairing code from `jcode pair` on the remote host")
     p.add_argument("--working-dir", required=True)
-    p.add_argument("--device-id", default="jcode-remote-check")
+    p.add_argument("--device-id", default="mona-remote-check")
     p.add_argument("--device-name", default="jcode remote check")
     p.add_argument("--prompt", default="Run a shell command that prints the OS "
                                        "name and current directory, then report the result.")

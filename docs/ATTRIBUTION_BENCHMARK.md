@@ -9,8 +9,8 @@ actually credited to us.
 ## Why this exists
 
 Catalog attribution today is mostly cookie-based referral links
-(`?via=jcode-discovery`). That works when a human clicks the listing URL in a
-browser. Most jcode-driven signups instead happen from an agent following the
+(`?via=mona-discovery`). That works when a human clicks the listing URL in a
+browser. Most mona-driven signups instead happen from an agent following the
 select-phase `setup` instructions in a CLI, where no browser cookie is ever
 set. Each sponsor's flow is different, so every sponsor gets its own
 expectation entry and a 0-100 score.
@@ -27,7 +27,7 @@ Each sponsor is scored over the applicable checks (skips are excluded):
 | `cli_flow_attributable` | If setup is CLI-first, attribution must not depend solely on a browser cookie: either the setup routes account creation through the marked URL, or the sponsor declares a non-cookie mechanism. |
 | `live_url_resolves` | (`--live-web`) The marked URL responds and redirects do not drop the marker. |
 
-`cli_flow_attributable` is the **primary check**. Nearly every jcode-driven
+`cli_flow_attributable` is the **primary check**. Nearly every mona-driven
 signup happens inside an agent CLI flow, so a sponsor whose attribution only
 works when a human clicks a browser link is effectively unattributed for us.
 Accordingly:
@@ -59,9 +59,9 @@ attribution `mechanism` and `marker`. Supported mechanisms:
 - `api-partner-id`: a partner identifier embedded in the API/MCP setup.
 
 For non-cookie mechanisms, `marker` is the exact text that must occur in the
-select-phase setup, such as `--via jcode-discovery`. Use `listing_marker` when
+select-phase setup, such as `--via mona-discovery`. Use `listing_marker` when
 the browser URL uses a different representation, such as
-`via=jcode-discovery`. Declaring a mechanism without serving its marker fails
+`via=mona-discovery`. Declaring a mechanism without serving its marker fails
 the primary CLI-attribution check.
 
 A unit test enforces that every tool with a positive case in
@@ -85,7 +85,7 @@ python scripts/benchmark_attribution.py --catalog-file catalog.json
 ```
 
 Reports are written to `target/attribution-benchmark/latest.json`. Live
-requests to the discovery service carry `x-jcode-discovery-benchmark: 1` so
+requests to the discovery service carry `x-mona-discovery-benchmark: 1` so
 they are excluded from sponsor reporting.
 
 ## Known gap (as of the first run)

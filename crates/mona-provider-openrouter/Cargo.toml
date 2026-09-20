@@ -1,0 +1,17 @@
+[package]
+name = "mona-provider-openrouter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mona-schema-dialect = { path = "../mona-schema-dialect" }
+dirs = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+bytes = "1"
+futures = "0.3"
+mona-core = { path = "../mona-core" }
+mona-logging = { path = "../mona-logging" }
+mona-message-types = { path = "../mona-message-types" }
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }

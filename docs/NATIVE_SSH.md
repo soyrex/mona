@@ -129,10 +129,10 @@ actual daemon's capability, not merely the bridge executable's version. An old
 shared daemon is refused rather than silently reloaded or killed.
 
 To test or deploy alongside an existing daemon without interrupting it, start a
-matching daemon in a separate `JCODE_RUNTIME_DIR` and point
+matching daemon in a separate `MONA_RUNTIME_DIR` and point
 `--ssh-server-socket /remote/runtime/jcode.sock` at it. A socket override by itself
 does not isolate the daemon lock. A remote executable wrapper may instead export
-both `JCODE_RUNTIME_DIR` and `JCODE_SOCKET` before executing the new binary.
+both `MONA_RUNTIME_DIR` and `MONA_SOCKET` before executing the new binary.
 
 ## Disconnect behavior
 
@@ -174,10 +174,10 @@ Targeted suites:
 
 ```sh
 cargo test --lib cli::ssh
-cargo test -p jcode-protocol
-cargo test -p jcode-tui --lib ssh_remote -- --test-threads=1
-cargo test -p jcode-app-core --lib client_disconnect_cleanup -- --test-threads=1
-cargo test -p jcode-app-core --lib client_lifecycle -- --test-threads=1
+cargo test -p mona-protocol
+cargo test -p mona-tui --lib ssh_remote -- --test-threads=1
+cargo test -p mona-app-core --lib client_disconnect_cleanup -- --test-threads=1
+cargo test -p mona-app-core --lib client_lifecycle -- --test-threads=1
 cargo test --test e2e disconnect:: -- --test-threads=1
 ```
 
@@ -190,8 +190,8 @@ and any blocked provider-backed acceptance.
 ### Real CLI acceptance
 
 `tests/test_native_ssh_cli.py` is opt-in and uses actual OpenSSH, a built CLI, and
-a real PTY. Set `JCODE_NATIVE_SSH_BINARY`, `JCODE_NATIVE_SSH_HOST`,
-`JCODE_NATIVE_SSH_REMOTE_BINARY`, and `JCODE_NATIVE_SSH_CWD`. The remote wrapper
+a real PTY. Set `MONA_NATIVE_SSH_BINARY`, `MONA_NATIVE_SSH_HOST`,
+`MONA_NATIVE_SSH_REMOTE_BINARY`, and `MONA_NATIVE_SSH_CWD`. The remote wrapper
 should select an isolated daemon runtime. With no configuration it skips without
 network access. The script only sends context-only messages, never inference.
 
@@ -210,8 +210,8 @@ not claimed as passed by the context-only SSH acceptance.
 ### Remote login acceptance
 
 `tests/test_native_ssh_login.py` requires the separate explicit opt-in
-`JCODE_NATIVE_SSH_LOGIN=1`, plus the local binary, SSH host, workspace, and
-`JCODE_NATIVE_SSH_LOGIN_REMOTE_EXECUTABLE` (the actual remote ELF, not a wrapper).
+`MONA_NATIVE_SSH_LOGIN=1`, plus the local binary, SSH host, workspace, and
+`MONA_NATIVE_SSH_LOGIN_REMOTE_EXECUTABLE` (the actual remote ELF, not a wrapper).
 It creates a private remote home/runtime and never uses the user's credentials.
 The current harness checks the shared provider catalog and two import
 choices before the isolated login scenarios. Updating this harness does not by
@@ -248,9 +248,9 @@ offline harness checks and the expanded live acceptance passed.
 
 ### Local credential import acceptance
 
-`tests/test_native_ssh_import.py` requires `JCODE_NATIVE_SSH_IMPORT=1`,
-`JCODE_NATIVE_SSH_BINARY`, `JCODE_NATIVE_SSH_HOST`, `JCODE_NATIVE_SSH_CWD`, and
-`JCODE_NATIVE_SSH_IMPORT_REMOTE_EXECUTABLE` (the actual remote ELF). It creates
+`tests/test_native_ssh_import.py` requires `MONA_NATIVE_SSH_IMPORT=1`,
+`MONA_NATIVE_SSH_BINARY`, `MONA_NATIVE_SSH_HOST`, `MONA_NATIVE_SSH_CWD`, and
+`MONA_NATIVE_SSH_IMPORT_REMOTE_EXECUTABLE` (the actual remote ELF). It creates
 fresh local and remote homes with unmistakably synthetic credentials. Its safety
 wrapper refuses anything except the selected synthetic payload before invoking
 the real receiver CLI. No personal credentials are imported by the test.

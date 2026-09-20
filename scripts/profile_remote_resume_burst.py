@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--burst", type=int, default=20)
     p.add_argument("--timeout", type=float, default=15.0)
     p.add_argument("--stagger-ms", type=float, default=0.0)
-    p.add_argument("--json-out", default="/tmp/jcode_remote_burst_profile.json")
+    p.add_argument("--json-out", default="/tmp/mona_remote_burst_profile.json")
     return p.parse_args()
 
 
@@ -167,7 +167,7 @@ def start_resume_client(binary: str, env: dict[str, str], session_id: str) -> Li
             "--no-update",
             "--no-selfdev",
             "--socket",
-            env["JCODE_SOCKET"],
+            env["MONA_SOCKET"],
             "--fresh-spawn",
             "--resume",
             session_id,
@@ -285,7 +285,7 @@ def run_burst(
             client.buffer += chunk
             client.buffer = reply_queries(fd, client.buffer)
             lower = client.buffer.lower()
-            if b"loading session" in lower or b"jcode" in lower or len(client.buffer) > 2048:
+            if b"loading session" in lower or b"mona" in lower or len(client.buffer) > 2048:
                 client.done = True
 
         for client in clients:
@@ -319,30 +319,30 @@ def run_burst(
 
 def main() -> None:
     args = parse_args()
-    root = Path(tempfile.mkdtemp(prefix="jcode-remote-burst-"))
+    root = Path(tempfile.mkdtemp(prefix="mona-remote-burst-"))
     home = root / "home"
     run = root / "run"
     home.mkdir(parents=True, exist_ok=True)
     run.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env["JCODE_HOME"] = str(home)
-    env["JCODE_RUNTIME_DIR"] = str(run)
-    env["JCODE_SOCKET"] = str(run / "jcode.sock")
-    env["JCODE_NO_TELEMETRY"] = "1"
-    env["JCODE_DEBUG_CONTROL"] = "1"
-    env["JCODE_TEMP_SERVER"] = "1"
-    env["JCODE_SERVER_OWNER_PID"] = str(os.getpid())
-    debug_socket = run / "jcode-debug.sock"
+    env["MONA_HOME"] = str(home)
+    env["MONA_RUNTIME_DIR"] = str(run)
+    env["MONA_SOCKET"] = str(run / "jcode.sock")
+    env["MONA_NO_TELEMETRY"] = "1"
+    env["MONA_DEBUG_CONTROL"] = "1"
+    env["MONA_TEMP_SERVER"] = "1"
+    env["MONA_SERVER_OWNER_PID"] = str(os.getpid())
+    debug_socket = run / "mona-debug.sock"
 
     server = subprocess.Popen(
-        [args.binary, "serve", "--socket", env["JCODE_SOCKET"], "--debug-socket"],
+        [args.binary, "serve", "--socket", env["MONA_SOCKET"], "--debug-socket"],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         preexec_fn=os.setsid,
     )
     try:
-        wait_for_socket(Path(env["JCODE_SOCKET"]))
+        wait_for_socket(Path(env["MONA_SOCKET"]))
         wait_for_socket(debug_socket)
         session_ids = [create_session(debug_socket, os.getcwd()) for _ in range(args.burst)]
 

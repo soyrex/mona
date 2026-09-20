@@ -7,7 +7,7 @@ Conifer uses the existing OpenAI-compatible runtime. Its authenticated
 metadata and usable persisted catalog metadata take precedence over built-in
 context limits, including when a live window becomes smaller.
 
-The Conifer-specific fallback in `crates/jcode-base/src/provider_catalog.rs`
+The Conifer-specific fallback in `crates/mona-base/src/provider_catalog.rs`
 adds exact context windows for 24 previously unresolved IDs. These are dated
 observations for Conifer routes, not model-family limits for other providers.
 Other existing family fallbacks are unchanged. The catalog completeness check

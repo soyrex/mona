@@ -21,7 +21,7 @@ def fetch_stars(repository: str, token: str) -> list[dt.date]:
             headers={
                 "Accept": "application/vnd.github.star+json",
                 "Authorization": f"Bearer {token}",
-                "User-Agent": "jcode-star-history",
+                "User-Agent": "mona-star-history",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )

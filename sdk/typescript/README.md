@@ -1,9 +1,9 @@
-# @1jehuang/jcode-sdk
+# @1jehuang/mona-sdk
 
 TypeScript SDK for the **jcode harness API** (protocol v1) — the stable,
 versioned boundary between the jcode agent runtime and any client.
 
-It mirrors `crates/jcode-harness-api` and talks NDJSON over the harness API
+It mirrors `crates/mona-harness-api` and talks NDJSON over the harness API
 Unix socket. Schema drift is guarded from both sides: a Rust test fails if a
 variant is added without mirroring it here, and a Node test fails if the tag
 sets diverge.
@@ -13,7 +13,7 @@ Full documentation: **[jcode.sh/sdk](https://jcode.sh/sdk)**
 ## Install
 
 ```bash
-npm install @1jehuang/jcode-sdk
+npm install @1jehuang/mona-sdk
 ```
 
 From a source checkout:
@@ -47,10 +47,10 @@ jcode api-bridge
 ```
 
 It starts the jcode server if one is not already up, then exposes the API
-socket (`$XDG_RUNTIME_DIR/jcode-api.sock`) and translates onto the internal
+socket (`$XDG_RUNTIME_DIR/mona-api.sock`) and translates onto the internal
 daemon socket. The socket is owner-only, matching the daemon socket it fronts.
 
-Use `--api-socket <path>` to listen elsewhere, and set `JCODE_API_SOCKET` to
+Use `--api-socket <path>` to listen elsewhere, and set `MONA_API_SOCKET` to
 the same path in your client. (The global `--socket` selects the *internal
 daemon* socket, which is a different thing.)
 
@@ -95,7 +95,7 @@ A complete runnable application is available in
 [`examples/demo-app`](https://github.com/1jehuang/jcode/tree/master/sdk/typescript/examples/demo-app).
 
 ```ts
-import { JcodeClient } from "@1jehuang/jcode-sdk";
+import { JcodeClient } from "@1jehuang/mona-sdk";
 
 const client = await JcodeClient.launch({ workingDir: process.cwd() });
 
@@ -141,7 +141,7 @@ To verify message framing and concurrent history reads against a real provider
 in a private instance, run the opt-in acceptance check from the repository root:
 
 ```sh
-JCODE_SDK_TEST_MODEL="your-model-id" node sdk/typescript/test/live-text-framing.mjs ./target/selfdev/jcode
+MONA_SDK_TEST_MODEL="your-model-id" node sdk/typescript/test/live-text-framing.mjs ./target/selfdev/jcode
 ```
 
 This uses your existing provider login and quota, runs one harmless bash tool,
@@ -352,8 +352,8 @@ up for you:
 | `inheritLogins` | Inherit the user's provider logins. Defaults to `true`. |
 | `binary` | Path to the jcode binary. Defaults to `jcode` on `PATH`. |
 | `env` | Extra environment variables for the instance. |
-| `swarmModel` | Operator-enforced model for all swarm workers. Use `inherit` to keep the coordinator model and auth route. Takes precedence over `env.JCODE_SWARM_MODEL`. |
-| `wakeMode` | `internal` (daemon-owned wakes) or `external` (emit `wake_requested` for the operator). Takes precedence over `env.JCODE_WAKE_MODE`. |
+| `swarmModel` | Operator-enforced model for all swarm workers. Use `inherit` to keep the coordinator model and auth route. Takes precedence over `env.MONA_SWARM_MODEL`. |
+| `wakeMode` | `internal` (daemon-owned wakes) or `external` (emit `wake_requested` for the operator). Takes precedence over `env.MONA_WAKE_MODE`. |
 | `startupTimeoutMs` | How long to wait for the instance to come up. Defaults to 30000. |
 | `cleanupTimeoutMs` | How long `close()` spends removing an ephemeral home. Defaults to 30000. |
 | `inheritStderr` | Forward the instance's stderr to your process. Defaults to `false`. |
@@ -366,9 +366,9 @@ rebuild its complete session index without keeping a separate id registry.
 
 | Env var | Effect |
 | --- | --- |
-| `JCODE_API_SOCKET` | Override the API socket path |
-| `JCODE_WAKE_MODE` | Autonomous wake ownership: `internal` (default) or `external` |
-| `JCODE_RUNTIME_DIR` | Override the runtime directory |
+| `MONA_API_SOCKET` | Override the API socket path |
+| `MONA_WAKE_MODE` | Autonomous wake ownership: `internal` (default) or `external` |
+| `MONA_RUNTIME_DIR` | Override the runtime directory |
 | `XDG_RUNTIME_DIR` | Default runtime directory on Linux |
 
 Or pass `socketPath` to `connect()`.
@@ -381,7 +381,7 @@ JavaScript errors (for example, an OS filesystem error) can still surface from
 the platform.
 
 ```ts
-import { HarnessError, StructuredOutputError } from "@1jehuang/jcode-sdk";
+import { HarnessError, StructuredOutputError } from "@1jehuang/mona-sdk";
 
 try {
   await client.run(sessionId, prompt);
@@ -410,11 +410,11 @@ try {
 
 | Code | Cause | Recovery |
 | --- | --- | --- |
-| `jcode_not_found` | `launch()` could not execute jcode. | Install jcode, put it on `PATH`, or pass `binary` with an absolute path. |
+| `mona_not_found` | `launch()` could not execute jcode. | Install jcode, put it on `PATH`, or pass `binary` with an absolute path. |
 | `startup_failed` | The private instance exited before opening its API socket. Its stderr is included in the message. | Display/log the message; fix the reported configuration, credential, or binary error before retrying. |
 | `startup_timeout` | The private instance did not open its API socket within `startupTimeoutMs`. | Increase the timeout on a slow machine; otherwise inspect stderr and ensure the runtime directory is writable. |
 | `invalid_instance_home` | `jcodeHome`, its credential paths, or the source login home is unsafe (same directory, symlink, file, or traversal). | Choose a separate real directory. Do not point a private instance at the user's live jcode home. |
-| `connect_failed` | The bridge is absent, dead, or listening at another socket path. | Run `jcode api-bridge`; verify `socketPath` or `JCODE_API_SOCKET`. The message names the attempted path. |
+| `connect_failed` | The bridge is absent, dead, or listening at another socket path. | Run `jcode api-bridge`; verify `socketPath` or `MONA_API_SOCKET`. The message names the attempted path. |
 | `handshake_failed` | The peer replied with an invalid frame during protocol negotiation. | Confirm the socket is a jcode harness socket and upgrade jcode/SDK together. |
 | `unsupported_version` | Client and bridge do not share a protocol major version. | Upgrade the older side. Do not retry unchanged versions. |
 
@@ -500,5 +500,5 @@ npm run check   # typecheck + build + tests (mock harness, no daemon needed)
 ```
 
 `test/schema-parity.test.ts` reads the Rust enums directly, and
-`crates/jcode-harness-api`'s `typescript_sdk_lists_every_variant` test reads
+`crates/mona-harness-api`'s `typescript_sdk_lists_every_variant` test reads
 this package. Adding a variant on either side without the other fails CI.

@@ -91,7 +91,7 @@ mod tests {
     use crate::storage::lock_test_env;
     use clap::Parser;
 
-    const SELFDEV_ENV: &str = jcode_selfdev_types::CLIENT_SELFDEV_ENV;
+    const SELFDEV_ENV: &str = mona_selfdev_types::CLIENT_SELFDEV_ENV;
 
     fn with_selfdev_env_removed<T>(f: impl FnOnce() -> T) -> T {
         let _guard = lock_test_env();
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn initial_title_labels_server() {
         with_selfdev_env_removed(|| {
-            let args = Args::parse_from(["jcode", "serve"]);
+            let args = Args::parse_from(["mona", "serve"]);
             assert_eq!(initial_title(&args), "jcode:server");
         });
     }
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn initial_title_labels_resume_client_with_short_name() {
         with_selfdev_env_removed(|| {
-            let args = Args::parse_from(["jcode", "--resume", "session_fox_123"]);
+            let args = Args::parse_from(["mona", "--resume", "session_fox_123"]);
             assert_eq!(initial_title(&args), "jcode:c:fox");
         });
     }
@@ -123,20 +123,20 @@ mod tests {
     #[test]
     fn initial_title_labels_selfdev_command() {
         with_selfdev_env_removed(|| {
-            let args = Args::parse_from(["jcode", "self-dev"]);
+            let args = Args::parse_from(["mona", "self-dev"]);
             assert_eq!(initial_title(&args), "jcode:selfdev");
         });
     }
 
     #[test]
     fn initial_title_labels_windows_hotkey_listener() {
-        let args = Args::parse_from(["jcode", "setup-hotkey", "--listen-windows-hotkey"]);
+        let args = Args::parse_from(["mona", "setup-hotkey", "--listen-windows-hotkey"]);
         assert_eq!(initial_title(&args), "jcode hotkey listener");
     }
 
     #[test]
     fn initial_title_labels_hotkey_uninstall() {
-        let args = Args::parse_from(["jcode", "setup-hotkey", "--uninstall"]);
+        let args = Args::parse_from(["mona", "setup-hotkey", "--uninstall"]);
         assert_eq!(initial_title(&args), "jcode hotkey uninstall");
     }
 }

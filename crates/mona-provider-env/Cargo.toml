@@ -1,0 +1,18 @@
+[package]
+name = "mona-provider-env"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "mona_provider_env"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+mona-core = { path = "../mona-core" }
+mona-logging = { path = "../mona-logging" }
+mona-provider-metadata = { path = "../mona-provider-metadata" }
+mona-storage = { path = "../mona-storage" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,7 +1,7 @@
 # Remote jcode (cross-machine)
 
 Drive a jcode session running on **another machine** from this one, over the
-WebSocket gateway (`crates/jcode-base/src/gateway.rs`).
+WebSocket gateway (`crates/mona-base/src/gateway.rs`).
 
 Verified working: Linux client -> Windows 11 host over Tailscale, including
 remote `bash` tool execution, ~10ms WebSocket upgrade.
@@ -20,7 +20,7 @@ From inside jcode, `/remote` does all of this:
 
 The equivalent by hand:
 
-1. Enable the gateway in `~/.jcode/config.toml` (Windows: `%USERPROFILE%\.jcode\config.toml`):
+1. Enable the gateway in `~/.mona/config.toml` (Windows: `%USERPROFILE%\.jcode\config.toml`):
 
    ```toml
    [gateway]
@@ -29,7 +29,7 @@ The equivalent by hand:
    bind_addr = "0.0.0.0"
    ```
 
-   `JCODE_GATEWAY_ENABLED=1` works as an env override.
+   `MONA_GATEWAY_ENABLED=1` works as an env override.
 
 2. Restart the server so it picks up the config:
 
@@ -52,7 +52,7 @@ python3 scripts/remote/remote_check.py --host <host-ip> --code 123456 \
     --working-dir '/path/on/remote'
 ```
 
-The token is cached in `~/.jcode/remote-tokens/<host>_<port>.json` (mode 600),
+The token is cached in `~/.mona/remote-tokens/<host>_<port>.json` (mode 600),
 so later runs omit `--code`.
 
 ## Gotchas found in practice
@@ -71,7 +71,7 @@ so later runs omit `--code`.
   Then allow the port, scoped to the Tailscale CGNAT range rather than the world:
 
   ```powershell
-  netsh advfirewall firewall add rule name="jcode-gateway-tailscale" `
+  netsh advfirewall firewall add rule name="mona-gateway-tailscale" `
     dir=in action=allow protocol=TCP localport=7643 remoteip=100.64.0.0/10
   ```
 

@@ -87,17 +87,17 @@ def main() -> int:
         print(f"binary not found: {binary}")
         return 3
 
-    root = Path(tempfile.mkdtemp(prefix="jcode-startup-lag-"))
+    root = Path(tempfile.mkdtemp(prefix="mona-startup-lag-"))
     run = root / "run"
     run.mkdir(parents=True)
 
     env = os.environ.copy()
     # Live server and real home: catalog resolution is the thing under test, so a
     # throwaway home with no providers would skip it entirely.
-    runtime = Path(env.get("JCODE_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
-    env["JCODE_SOCKET"] = env.get("JCODE_SOCKET") or str(runtime / "jcode.sock")
-    env["JCODE_DEBUG_CONTROL"] = "1"
-    debug_sock = runtime / "jcode-debug.sock"
+    runtime = Path(env.get("MONA_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    env["MONA_SOCKET"] = env.get("MONA_SOCKET") or str(runtime / "jcode.sock")
+    env["MONA_DEBUG_CONTROL"] = "1"
+    debug_sock = runtime / "mona-debug.sock"
     cmd_path, resp_path = run / "cmd", run / "resp"
 
     if not args.json:

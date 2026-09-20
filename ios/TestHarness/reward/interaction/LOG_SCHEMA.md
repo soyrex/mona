@@ -1,6 +1,6 @@
 # jcode TUI log schema (for grounding the user model in real usage)
 
-Logs live in `~/.jcode/logs/jcode-YYYY-MM-DD.log`. Lines look like:
+Logs live in `~/.mona/logs/mona-YYYY-MM-DD.log`. Lines look like:
 
     [2026-06-28 00:15:41.814] [INFO] <message>
 
@@ -38,7 +38,7 @@ app must also support, so they should weight the mobile user graph:
 
 ## How to mine it (for log_mining.py)
 
-1. Read the last N daily logs (default 7) under `~/.jcode/logs/`.
+1. Read the last N daily logs (default 7) under `~/.mona/logs/`.
 2. Count: user messages (`SERVER_REQUEST_LIFECYCLE` start, or `Assistant:` turns
    as a proxy for turns), interrupts, soft_interrupts, cancels, resumes/session
    switches, model switches, scrolls, tool runs (`TOOL_LIFECYCLE phase=start`).

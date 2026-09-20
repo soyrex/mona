@@ -2,12 +2,12 @@
 """Opt-in native SSH acceptance against a built CLI and an explicitly chosen host.
 
 Required environment (no network access when unset):
-  JCODE_NATIVE_SSH_BINARY=/absolute/path/to/local/jcode
-  JCODE_NATIVE_SSH_HOST=jcode-dev
-  JCODE_NATIVE_SSH_REMOTE_BINARY=/absolute/path/to/remote-wrapper
-  JCODE_NATIVE_SSH_CWD=/absolute/remote/workspace
-Optional JCODE_NATIVE_SSH_SERVER_SOCKET selects a prestarted isolated daemon.
-The remote wrapper should select an isolated JCODE_HOME/JCODE_RUNTIME_DIR and a
+  MONA_NATIVE_SSH_BINARY=/absolute/path/to/local/jcode
+  MONA_NATIVE_SSH_HOST=mona-dev
+  MONA_NATIVE_SSH_REMOTE_BINARY=/absolute/path/to/remote-wrapper
+  MONA_NATIVE_SSH_CWD=/absolute/remote/workspace
+Optional MONA_NATIVE_SSH_SERVER_SOCKET selects a prestarted isolated daemon.
+The remote wrapper should select an isolated MONA_HOME/MONA_RUNTIME_DIR and a
 fresh matching binary. Host keys must already be verified in system known_hosts.
 
 Run: python3 tests/test_native_ssh_cli.py
@@ -41,7 +41,7 @@ import time
 import unittest
 import uuid
 
-PREFIX = "JCODE_NATIVE_SSH_"
+PREFIX = "MONA_NATIVE_SSH_"
 MAX_FRAME = 8 * 1024 * 1024
 MAX_STDERR = 16 * 1024
 TIMEOUT = 60
@@ -189,7 +189,7 @@ class Bridge:
 
     def handshake(self):
         header = self.frame()
-        require(header.get("kind") == "jcode-native-stdio" and header.get("protocol") == 1,
+        require(header.get("kind") == "mona-native-stdio" and header.get("protocol") == 1,
                 f"Wrong native SSH handshake: {header}")
         require(bool(header.get("version") and header.get("socket_path") and header.get("working_dir")),
                 "Missing handshake identity metadata")
@@ -256,7 +256,7 @@ def owned_ssh(cli_pid):
 def owned_sockets(directory):
     # Jcode hardening can deny /proc/<pid>/fd even for our own child. A unique
     # TMPDIR passed only to this CLI makes filesystem observation unambiguous.
-    return {path for path in Path(directory).glob("jcode-ssh-*/native.sock") if path.is_socket()}
+    return {path for path in Path(directory).glob("mona-ssh-*/native.sock") if path.is_socket()}
 
 
 def child_terminal():
@@ -267,7 +267,7 @@ def child_terminal():
 def tui_acceptance(config, env, local_cwd, session_id, sentinel, *, exit_mode="quit"):
     require(exit_mode in {"quit", "sighup"}, "Unknown TUI exit mode")
     # Only sockets live here. Keep this path short for Unix sockaddr limits,
-    # independently of potentially long JCODE_SCRATCH_DIR artifact paths.
+    # independently of potentially long MONA_SCRATCH_DIR artifact paths.
     socket_temp = tempfile.TemporaryDirectory(prefix="jssh-", dir="/tmp")
     child_env = dict(env, TMPDIR=socket_temp.name)
     master, slave = pty.openpty()
@@ -364,23 +364,23 @@ def tui_acceptance(config, env, local_cwd, session_id, sentinel, *, exit_mode="q
 
 def run_acceptance(config):
     require(sys.platform.startswith("linux"), "PTY owned-child acceptance requires Linux /proc")
-    with tempfile.TemporaryDirectory(prefix="jcode-native-ssh-", dir=os.environ.get("JCODE_SCRATCH_DIR")) as root:
+    with tempfile.TemporaryDirectory(prefix="mona-native-ssh-", dir=os.environ.get("MONA_SCRATCH_DIR")) as root:
         root = Path(root)
-        home = root / "jcode"
+        home = root / "mona"
         runtime = root / "runtime"
         home.mkdir(mode=0o700)
         runtime.mkdir(mode=0o700)
         # Keep the user's real HOME only for explicitly requested system SSH
         # identity/config. Isolate all Jcode state and disable local UI hooks.
-        env = {key: value for key, value in os.environ.items() if not key.startswith("JCODE_")}
+        env = {key: value for key, value in os.environ.items() if not key.startswith("MONA_")}
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "KITTY_LISTEN_ON", "TMUX", "ZELLIJ"):
             env.pop(key, None)
-        env.update(JCODE_HOME=str(home), JCODE_RUNTIME_DIR=str(runtime), XDG_RUNTIME_DIR=str(runtime),
-                   JCODE_NO_TELEMETRY="1", JCODE_WAKE_MODE="external", TERM="xterm-256color",
+        env.update(MONA_HOME=str(home), MONA_RUNTIME_DIR=str(runtime), XDG_RUNTIME_DIR=str(runtime),
+                   MONA_NO_TELEMETRY="1", MONA_WAKE_MODE="external", TERM="xterm-256color",
                    DO_NOT_TRACK="1", NO_COLOR="0")
         # SSH agent may live under the original XDG runtime, but its absolute
         # SSH_AUTH_SOCK value is deliberately retained above.
-        sentinel = "JCODE_SSH_CONTEXT_" + uuid.uuid4().hex
+        sentinel = "MONA_SSH_CONTEXT_" + uuid.uuid4().hex
         instance = "native-ssh-acceptance-" + uuid.uuid4().hex
         pipeline = subprocess.run(
             ["ssh", *SSH_FLAGS, "--", config["HOST"], remote_command(config)],
@@ -389,7 +389,7 @@ def run_acceptance(config):
         require(pipeline.returncode == 0,
                 "SSH pipeline failed on stdin EOF: " + pipeline.stderr.decode(errors="replace"))
         frames = [json.loads(line) for line in pipeline.stdout.splitlines() if line.strip()]
-        require(frames and frames[0].get("kind") == "jcode-native-stdio", "Pipeline handshake missing")
+        require(frames and frames[0].get("kind") == "mona-native-stdio", "Pipeline handshake missing")
         require(any(frame.get("type") == "pong" and frame.get("id") == 99 for frame in frames),
                 "Pipeline discarded its final Pong on stdin EOF")
         print("PASS real SSH pipeline: stdin EOF preserves final Pong and exits0")
@@ -454,7 +454,7 @@ class HarnessSelfTests(unittest.TestCase):
     def test_owned_socket_observation_uses_only_private_temp_root(self):
         import socket
         with tempfile.TemporaryDirectory(prefix="jssh-", dir="/tmp") as root:
-            directory = Path(root) / "jcode-ssh-owned"
+            directory = Path(root) / "mona-ssh-owned"
             directory.mkdir(mode=0o700)
             path = directory / "native.sock"
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:

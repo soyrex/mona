@@ -11,7 +11,7 @@ import sys
 import os
 from pathlib import Path
 
-SOCKET_PATH = f"/run/user/{os.getuid()}/jcode-debug.sock"
+SOCKET_PATH = f"/run/user/{os.getuid()}/mona-debug.sock"
 MAIN_SOCKET_PATH = f"/run/user/{os.getuid()}/jcode.sock"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -434,7 +434,7 @@ def main():
     if not os.path.exists(SOCKET_PATH):
         print(f"\n✗ Debug socket not found at {SOCKET_PATH}")
         print("Make sure jcode server is running with debug control enabled.")
-        print("Enable with: touch ~/.jcode/debug_control")
+        print("Enable with: touch ~/.mona/debug_control")
         sys.exit(1)
 
     total_passed = 0

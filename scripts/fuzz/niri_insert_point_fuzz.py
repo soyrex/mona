@@ -2,9 +2,9 @@
 
 Run:  python3 scripts/fuzz/niri_insert_point_fuzz.py <seed> <count>
 
-Emits niri-valid configs to ~/.jcode/scratch/fuzz719/valid_inputs.json. Feed
+Emits niri-valid configs to ~/.mona/scratch/fuzz719/valid_inputs.json. Feed
 that to the committed corpus in
-crates/jcode-setup-hints/src/linux_niri_fuzz_corpus.txt to widen coverage.
+crates/mona-setup-hints/src/linux_niri_fuzz_corpus.txt to widen coverage.
 
 Differential fuzz: does jcode's insert-point scan agree with real niri?
 

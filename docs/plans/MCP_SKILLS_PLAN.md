@@ -93,7 +93,7 @@ MCP uses JSON-RPC 2.0 over stdio:
 
 **Initialize:**
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"jcode","version":"0.1.0"}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mona","version":"0.1.0"}}}
 ```
 
 **List tools:**

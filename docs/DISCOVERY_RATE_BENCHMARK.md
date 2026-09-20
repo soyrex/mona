@@ -121,15 +121,15 @@ bypasses.
 ## Benchmark traffic marking
 
 Like the catalog benchmark, the runner starts a dedicated server with
-`JCODE_DISCOVERY_BENCHMARK=1`, so every request carries
-`x-jcode-discovery-benchmark: 1` and telemetry carries `benchmark_run: true`.
+`MONA_DISCOVERY_BENCHMARK=1`, so every request carries
+`x-mona-discovery-benchmark: 1` and telemetry carries `benchmark_run: true`.
 Benchmark traffic must be excluded from sponsor, billing, and organic-usage
 reporting.
 
 ## Interpreting results
 
 The trigger policy lives entirely in the `discover_tools` schema and description.
-`jcode-base/src/prompt_tests.rs` asserts Discovery is never injected into the
+`mona-base/src/prompt_tests.rs` asserts Discovery is never injected into the
 system prompt, so the tool description is the only lever. When recall is low and
 bypass is high, the fix belongs in that description, and this benchmark is the
 feedback loop for it. Record a baseline before changing wording:
@@ -258,7 +258,7 @@ finishing the comparison only needs the post-change arm, which halves the quota
 cost:
 
 ```bash
-JCODE_BIN=<after-bin> python scripts/benchmark_discovery_rate.py \
+MONA_BIN=<after-bin> python scripts/benchmark_discovery_rate.py \
   --provider gemini-api --model gemini-2.5-flash-lite --trials 3 \
   --case storage-user-uploads --case authentication-signin \
   --case observability-traces --case analytics-product-funnel \

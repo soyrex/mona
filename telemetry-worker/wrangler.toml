@@ -1,8 +1,8 @@
-name = "jcode-telemetry"
+name = "mona-telemetry"
 main = "src/worker.js"
 compatibility_date = "2025-01-01"
 
-# Custom domain for the website beacon (jcode-website public/beacon.js posts
+# Custom domain for the website beacon (mona-website public/beacon.js posts
 # here). Managed as a Workers custom domain, so Cloudflare creates the DNS
 # record and certificate automatically on deploy.
 routes = [
@@ -18,14 +18,14 @@ crons = ["17 4 * * *"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "jcode-telemetry"
+database_name = "mona-telemetry"
 database_id = "abaa524c-3e90-4ba9-a569-027e78a083c6"
 
 # Separately consented prompt/transcript content. Keep this bucket private and
 # configure an R2 lifecycle rule that deletes objects after 30 days.
 [[r2_buckets]]
 binding = "TRANSCRIPTS"
-bucket_name = "jcode-consented-transcripts"
+bucket_name = "mona-consented-transcripts"
 
 # High-volume firehose: every event is also written to Workers Analytics
 # Engine (time-series store, ~90-day retention, no database size cap). This is
@@ -42,7 +42,7 @@ bucket_name = "jcode-consented-transcripts"
 # (responses report firehose:false). After enabling, uncomment and redeploy.
 [[analytics_engine_datasets]]
 binding = "FIREHOSE"
-dataset = "jcode_telemetry_firehose"
+dataset = "mona_telemetry_firehose"
 
 # Web/subscription firehose (FIREHOSE_WEB_SCHEMA in src/worker.js). The main
 # FIREHOSE_SCHEMA is at Analytics Engine's 20-blob/20-double capacity, so
@@ -50,19 +50,19 @@ dataset = "jcode_telemetry_firehose"
 # caveat as above; the worker degrades gracefully without the binding.
 [[analytics_engine_datasets]]
 binding = "FIREHOSE_WEB"
-dataset = "jcode_web_firehose"
+dataset = "mona_web_firehose"
 
 # Privacy-safe sponsored-discovery funnel and reliability telemetry. A separate
 # dataset avoids repurposing the full main firehose schema.
 [[analytics_engine_datasets]]
 binding = "FIREHOSE_DISCOVERY"
-dataset = "jcode_discovery_firehose"
+dataset = "mona_discovery_firehose"
 
 # Complete website -> installer -> first-run conversion reconstruction. This
 # remains queryable for roughly 90 days even during a D1 size-cap incident.
 [[analytics_engine_datasets]]
 binding = "FIREHOSE_INSTALL"
-dataset = "jcode_install_firehose"
+dataset = "mona_install_firehose"
 
 # Coarse geography (country only, from Cloudflare's edge). Separate dataset
 # because the main and web schemas are at the 20-blob limit. See
@@ -71,13 +71,13 @@ dataset = "jcode_install_firehose"
 # country_daily rollup still records).
 [[analytics_engine_datasets]]
 binding = "FIREHOSE_GEO"
-dataset = "jcode_geo_firehose"
+dataset = "mona_geo_firehose"
 
 # Full raw concurrency payloads, including quality/version/presence metadata.
 # The main firehose has no concurrency fields. No old slot is repurposed.
 [[analytics_engine_datasets]]
 binding = "FIREHOSE_CONCURRENCY"
-dataset = "jcode_concurrency_firehose"
+dataset = "mona_concurrency_firehose"
 
 [vars]
 ALLOWED_ORIGIN = "*"

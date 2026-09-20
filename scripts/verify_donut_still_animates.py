@@ -68,45 +68,45 @@ def moving_rows(client, seconds: float) -> dict[int, int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--binary",
-                    default=str(REPO_ROOT / "target" / "selfdev" / "jcode"))
+                    default=str(REPO_ROOT / "target" / "selfdev" / "mona"))
     ap.add_argument("--watch-s", type=float, default=2.0)
     args = ap.parse_args()
 
     flick.ROWS, flick.COLS = 48, 160
     binary = str(Path(args.binary).resolve())
-    scratch = Path(os.environ.get("JCODE_SCRATCH_DIR") or tempfile.gettempdir())
-    root = Path(tempfile.mkdtemp(prefix="jcode-donut-verify-", dir=str(scratch)))
+    scratch = Path(os.environ.get("MONA_SCRATCH_DIR") or tempfile.gettempdir())
+    root = Path(tempfile.mkdtemp(prefix="mona-donut-verify-", dir=str(scratch)))
     home, run = root / "home", root / "run"
     home.mkdir(parents=True)
     run.mkdir(parents=True)
 
     env = os.environ.copy()
     env.update({
-        "JCODE_HOME": str(home), "JCODE_RUNTIME_DIR": str(run),
-        "JCODE_SOCKET": str(run / "jcode.sock"), "JCODE_NO_TELEMETRY": "1",
-        "JCODE_DEBUG_CONTROL": "1", "JCODE_TEMP_SERVER": "1",
-        "JCODE_SERVER_OWNER_PID": str(os.getpid()), "JCODE_PERF_TIER": "full",
-        "JCODE_THEME": "dark",
+        "MONA_HOME": str(home), "MONA_RUNTIME_DIR": str(run),
+        "MONA_SOCKET": str(run / "jcode.sock"), "MONA_NO_TELEMETRY": "1",
+        "MONA_DEBUG_CONTROL": "1", "MONA_TEMP_SERVER": "1",
+        "MONA_SERVER_OWNER_PID": str(os.getpid()), "MONA_PERF_TIER": "full",
+        "MONA_THEME": "dark",
         # The donut is opt-in since the config default flipped to false
-        # (17e075fb2), and this verifier's temp JCODE_HOME gets the default
+        # (17e075fb2), and this verifier's temp MONA_HOME gets the default
         # config. Without the explicit opt-in the "animation expected" half of
         # this verifier silently verifies nothing.
-        "JCODE_IDLE_ANIMATION": "1",
+        "MONA_IDLE_ANIMATION": "1",
     })
     env.setdefault("ANTHROPIC_API_KEY", "sk-ant-donut-verify")
-    debug_sock = run / "jcode-debug.sock"
+    debug_sock = run / "mona-debug.sock"
     cmd_path, resp_path = run / "client_cmd", run / "client_resp"
 
     log_fh = (root / "server.log").open("wb")
     server = subprocess.Popen(
-        [binary, "serve", "--socket", env["JCODE_SOCKET"], "--debug-socket",
+        [binary, "serve", "--socket", env["MONA_SOCKET"], "--debug-socket",
          "--no-update", "--no-selfdev"],
         env=env, stdout=log_fh, stderr=subprocess.STDOUT, preexec_fn=os.setsid)
 
     client = None
     failures: list[str] = []
     try:
-        flick.wait_for_socket(Path(env["JCODE_SOCKET"]))
+        flick.wait_for_socket(Path(env["MONA_SOCKET"]))
         flick.wait_for_socket(debug_sock)
         sid = flick.dbg(debug_sock, f"create_session:{REPO_ROOT}").strip()
         if sid.startswith("{"):

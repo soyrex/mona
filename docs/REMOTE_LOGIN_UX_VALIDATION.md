@@ -44,13 +44,13 @@ substitute for personal-token validity, provider acceptance or refresh coexisten
 | Existing remote logins are never silently overwritten | Ran OpenAI `repeat` and Claude `repeat` scenarios against the already-imported synthetic destination stores. | **Real interfaces with synthetic credentials:** both repeat attempts were refused and preserved the destination. No personal destination was modified for testing. |
 | Import success refreshes the matching remote daemon/catalog, never laptop auth state | Ran `ssh_import_success_refreshes_attached_remote_daemon_and_catalog` and `ssh_login_success_refreshes_attached_daemon_and_catalog_without_local_login_event`. | **Real protocol connection with injected completion:** received `notify_auth_changed` with the selected provider followed by `get_model_catalog`. No local authentication event was used. Real personal-provider model readiness remains untested. |
 | Ordinary remote OAuth initiation/cancel still works | Ran the real SSH login acceptance suite against the installed remote ELF. | **Real CLI/SSH, isolated home:** OpenAI/Claude authorization URLs matched VM-side flow/PKCE state, scoped cancellation passed, private error handling passed, and owned children/sockets were reaped. Browser approval and successful token exchange were not performed. |
-| User's shortcut actually runs the new experience | Launched the exact installed `jcode-dev tui` executable/arguments used by the shortcut in a fresh real Kitty window. | **Actual deployment:** connected to the real workspace; client reported `v0.83.6-dev (8121bebf4)`, server remained `v0.82.0-dev`. All final UI observations above used that window, not a test binary. |
+| User's shortcut actually runs the new experience | Launched the exact installed `mona-dev tui` executable/arguments used by the shortcut in a fresh real Kitty window. | **Actual deployment:** connected to the real workspace; client reported `v0.83.6-dev (8121bebf4)`, server remained `v0.82.0-dev`. All final UI observations above used that window, not a test binary. |
 | Verification does not disrupt the user's work or week-long VM setup | Quit/closed only the acceptance window. Cleaned the separately identified synthetic test daemons. Rechecked the VM shutdown timer. | **Actual deployment:** user daemon stayed running; the one-week timer stayed active at its original deadline. No personal token was copied and no provider inference was requested. |
 
 ## Reproducible supporting checks
 
 ```sh
-cargo test -p jcode-tui --lib auth_remote -- --test-threads=1
+cargo test -p mona-tui --lib auth_remote -- --test-threads=1
 # Observed: 29 passed.
 
 # Existing compiled test binary, serial execution:
@@ -68,7 +68,7 @@ The separate login suite passed initiation, cancellation, privacy and lifecycle.
 
 ## Evidence artifacts
 
-The execution host retained these task-local artifacts under `$JCODE_SCRATCH_DIR`:
+The execution host retained these task-local artifacts under `$MONA_SCRATCH_DIR`:
 
 - `real-login-acceptance-8121bebf4/result.json`: actual installed entry point,
   observations and explicit consent boundary.

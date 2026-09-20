@@ -1,12 +1,12 @@
 # Onboarding sandbox
 
-If you want to iterate on onboarding repeatedly without touching your real auth state, use a separate sandbox rooted under `JCODE_HOME` and `JCODE_RUNTIME_DIR`.
+If you want to iterate on onboarding repeatedly without touching your real auth state, use a separate sandbox rooted under `MONA_HOME` and `MONA_RUNTIME_DIR`.
 
 This repo already supports that isolation:
 
-- `JCODE_HOME` redirects jcode-owned state such as `~/.jcode` into a sandbox directory.
-- `JCODE_HOME` also redirects app config into `JCODE_HOME/config/jcode`.
-- `JCODE_RUNTIME_DIR` redirects sockets and other ephemeral runtime files.
+- `MONA_HOME` redirects mona-owned state such as `~/.jcode` into a sandbox directory.
+- `MONA_HOME` also redirects app config into `MONA_HOME/config/jcode`.
+- `MONA_RUNTIME_DIR` redirects sockets and other ephemeral runtime files.
 - External auth trust decisions are stored in the sandbox config, so a fresh sandbox starts with no trusted external auth imports.
 
 ## Fast start
@@ -36,8 +36,8 @@ scripts/onboarding_sandbox.sh seed-real-logins --with-transcripts
 scripts/onboarding_sandbox.sh fresh-real --with-transcripts
 ```
 
-How it works: when `JCODE_HOME` is set, jcode resolves every external credential
-and transcript lookup to `$JCODE_HOME/external/<same-relative-path-as-$HOME>`.
+How it works: when `MONA_HOME` is set, jcode resolves every external credential
+and transcript lookup to `$MONA_HOME/external/<same-relative-path-as-$HOME>`.
 `seed-real-logins` copies your real files there, so detection and import behave
 exactly as they would on a first-run machine that already has those tools
 installed. The copies are real tokens, so the sandbox stays local-only; your
@@ -84,7 +84,7 @@ scripts/onboarding_sandbox.sh jcode pair
 ## Reusable local auth fixtures
 
 For repeated login testing, use local auth fixtures. A fixture is a copy of a
-sandbox `JCODE_HOME` after you have put it into an interesting state, for
+sandbox `MONA_HOME` after you have put it into an interesting state, for
 example a typical logged-in OpenAI user, an expired token state, or an external
 auth import approval state.
 
@@ -118,10 +118,10 @@ scripts/auth_fixture.sh run normal-openai -- auth status
 
 Useful environment overrides:
 
-- `JCODE_ONBOARDING_SANDBOX`: select which sandbox receives the fixture.
-- `JCODE_ONBOARDING_DIR`: use an explicit sandbox directory.
-- `JCODE_AUTH_FIXTURE_DIR`: use a fixture store outside the repo, for example
-  `~/.local/share/jcode-auth-fixtures`.
+- `MONA_ONBOARDING_SANDBOX`: select which sandbox receives the fixture.
+- `MONA_ONBOARDING_DIR`: use an explicit sandbox directory.
+- `MONA_AUTH_FIXTURE_DIR`: use a fixture store outside the repo, for example
+  `~/.local/share/mona-auth-fixtures`.
 
 Suggested fixture names:
 
@@ -201,4 +201,4 @@ If you are iterating specifically on mobile onboarding UX, keep the simulator ru
 
 ## Caveat
 
-This sandbox is designed to isolate jcode-owned state and trusted external-import state. If you later decide to test explicit import/reuse flows from external tools, do that intentionally and treat it as a separate test case from first-run onboarding.
+This sandbox is designed to isolate mona-owned state and trusted external-import state. If you later decide to test explicit import/reuse flows from external tools, do that intentionally and treat it as a separate test case from first-run onboarding.

@@ -1,5 +1,5 @@
 import json,re,collections
-inp='/home/jeremy/jcode-transcript-export/handpick/digests/shard_01.json'; out='/home/jeremy/jcode-transcript-export/handpick/scores/shard_01.scores.json'
+inp='/home/jeremy/mona-transcript-export/handpick/digests/shard_01.json'; out='/home/jeremy/mona-transcript-export/handpick/scores/shard_01.scores.json'
 data=json.load(open(inp))
 def score(x):
  ts=x.get('todos') or []; n=len(ts); calls=x.get('todo_calls',0) or 0; st=[str(t.get('status','')).lower() for t in ts]; cs=[str(t.get('content','')).strip() for t in ts]; ne=[c for c in cs if c]; comp=sum(s=='completed' for s in st); pending=sum(s in ('pending','in_progress') for s in st)

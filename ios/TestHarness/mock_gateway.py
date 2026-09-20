@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic mock jcode gateway for end-to-end iOS app testing.
 
-Speaks the exact wire protocol from `crates/jcode-base/src/gateway.rs` on a
+Speaks the exact wire protocol from `crates/mona-base/src/gateway.rs` on a
 single TCP port, peeking the request line to route like the real gateway:
   - GET  /health   -> {status, version, gateway}
   - POST /pair     -> {token, server_name, server_version}

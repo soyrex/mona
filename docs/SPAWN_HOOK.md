@@ -13,7 +13,7 @@ pane, a tab in a wrapper app like herd, a specific monitor/workspace, etc.
 ## Configuration
 
 ```toml
-# ~/.jcode/config.toml
+# ~/.mona/config.toml
 [terminal]
 spawn_hook = "tmux new-window"
 ```
@@ -21,9 +21,9 @@ spawn_hook = "tmux new-window"
 Or per-environment:
 
 ```bash
-export JCODE_SPAWN_HOOK="tmux new-window"
+export MONA_SPAWN_HOOK="tmux new-window"
 # An empty value disables a config-file hook:
-export JCODE_SPAWN_HOOK=
+export MONA_SPAWN_HOOK=
 ```
 
 Env always wins over the config file.
@@ -33,7 +33,7 @@ Env always wins over the config file.
 When a headed spawn happens and a hook is configured, jcode runs:
 
 ```
-<spawn_hook> <jcode-binary> <args...>
+<spawn_hook> <mona-binary> <args...>
 ```
 
 - The hook command is parsed shell-style (quotes and backslash escapes work),
@@ -51,15 +51,15 @@ The hook (and any terminal spawned by the built-in fallback) receives:
 
 | Variable | Meaning |
 | --- | --- |
-| `JCODE_SPAWN_KIND` | Why the spawn happened: `swarm-agent`, `resume`, `selfdev`, `restart`, `jade-relay` |
-| `JCODE_SPAWN_SESSION_ID` | The jcode session the window will run |
-| `JCODE_SPAWN_TITLE` | Suggested window/tab title (includes session icon + name) |
-| `JCODE_SPAWN_CWD` | Session working directory |
-| `JCODE_SPAWN_PROGRAM` | Path of the jcode binary to execute |
-| `JCODE_SPAWN_COMMAND` | Full command line, shell-escaped, for hooks that take one shell string |
-| `JCODE_SPAWN_SWARM_ID` | (swarm spawns) The swarm the agent joins |
-| `JCODE_SPAWN_COORDINATOR_SESSION_ID` | (swarm spawns) The coordinator session that requested the spawn |
-| `JCODE_FRESH_SPAWN` | `1` when the spawn is a fresh window handoff |
+| `MONA_SPAWN_KIND` | Why the spawn happened: `swarm-agent`, `resume`, `selfdev`, `restart`, `jade-relay` |
+| `MONA_SPAWN_SESSION_ID` | The jcode session the window will run |
+| `MONA_SPAWN_TITLE` | Suggested window/tab title (includes session icon + name) |
+| `MONA_SPAWN_CWD` | Session working directory |
+| `MONA_SPAWN_PROGRAM` | Path of the jcode binary to execute |
+| `MONA_SPAWN_COMMAND` | Full command line, shell-escaped, for hooks that take one shell string |
+| `MONA_SPAWN_SWARM_ID` | (swarm spawns) The swarm the agent joins |
+| `MONA_SPAWN_COORDINATOR_SESSION_ID` | (swarm spawns) The coordinator session that requested the spawn |
+| `MONA_FRESH_SPAWN` | `1` when the spawn is a fresh window handoff |
 
 ### Client terminal environment (multi-terminal routing)
 
@@ -76,8 +76,8 @@ terminal the user is actually attached to:
 
 - The native variable (e.g. `ZELLIJ_SESSION_NAME`) is overridden with the
   client's value, so hooks that read it directly target the right session.
-- A `JCODE_CLIENT_<NAME>` alias (e.g. `JCODE_CLIENT_ZELLIJ_SESSION_NAME`,
-  `JCODE_CLIENT_TMUX`, `JCODE_CLIENT_DISPLAY`) is also exported so a hook can
+- A `MONA_CLIENT_<NAME>` alias (e.g. `MONA_CLIENT_ZELLIJ_SESSION_NAME`,
+  `MONA_CLIENT_TMUX`, `MONA_CLIENT_DISPLAY`) is also exported so a hook can
   explicitly distinguish the client's terminal from the server's.
 
 Covered keys include the terminal multiplexers (zellij, tmux, screen), terminal
@@ -90,7 +90,7 @@ the client actually has set are forwarded.
 When jcode detects that the requesting client is inside tmux, its built-in
 launcher automatically opens headed spawns in a right-side pane targeted at the
 requesting `TMUX_PANE`. This covers `/split`, `/fork`, resume-in-new-terminal,
-self-dev, and visible agent spawns. `JCODE_TERMINAL` can explicitly choose a
+self-dev, and visible agent spawns. `MONA_TERMINAL` can explicitly choose a
 terminal emulator instead, and a configured `spawn_hook` still takes complete
 precedence.
 
@@ -124,23 +124,23 @@ at a script:
 
 ```toml
 [terminal]
-spawn_hook = "~/bin/jcode-spawn-router"
+spawn_hook = "~/bin/mona-spawn-router"
 ```
 
 ```bash
 #!/usr/bin/env bash
-# ~/bin/jcode-spawn-router
-# argv: the jcode command to run ("$@"). Env: JCODE_SPAWN_* metadata.
+# ~/bin/mona-spawn-router
+# argv: the jcode command to run ("$@"). Env: MONA_SPAWN_* metadata.
 
-case "$JCODE_SPAWN_KIND" in
+case "$MONA_SPAWN_KIND" in
   swarm-agent)
     # Swarm workers as tmux panes in a window named after the swarm.
-    tmux new-window -n "swarm:${JCODE_SPAWN_SWARM_ID:0:8}" "$@" 2>/dev/null \
+    tmux new-window -n "swarm:${MONA_SPAWN_SWARM_ID:0:8}" "$@" 2>/dev/null \
       || tmux split-window "$@"
     ;;
   *)
     # Everything else as a normal terminal window.
-    kitty --title "$JCODE_SPAWN_TITLE" -e "$@" &
+    kitty --title "$MONA_SPAWN_TITLE" -e "$@" &
     ;;
 esac
 ```
@@ -153,17 +153,17 @@ above.
 ### Single-shell-string consumers
 
 Some launchers want one shell command string instead of argv. Use
-`$JCODE_SPAWN_COMMAND`:
+`$MONA_SPAWN_COMMAND`:
 
 ```bash
 #!/usr/bin/env bash
-zellij action new-pane -- bash -lc "$JCODE_SPAWN_COMMAND"
+zellij action new-pane -- bash -lc "$MONA_SPAWN_COMMAND"
 ```
 
 ## Programmatic discovery
 
 Programs that wrap jcode (e.g. herd-style session managers) can set
-`JCODE_SPAWN_HOOK` in the environment of the `jcode` server process they
+`MONA_SPAWN_HOOK` in the environment of the `jcode` server process they
 launch. Every headed spawn the server performs, including swarm agents
 requested by coordinators over the socket protocol, will then route through
 the wrapper's hook.
@@ -178,15 +178,15 @@ multiplexers, and a wrapper that owns placement should also own focus:
 ```toml
 [terminal]
 spawn_hook = "tmux new-window"
-focus_hook = "~/bin/jcode-focus"   # env: JCODE_FOCUS_SESSION_ID, JCODE_FOCUS_TITLE
+focus_hook = "~/bin/mona-focus"   # env: MONA_FOCUS_SESSION_ID, MONA_FOCUS_TITLE
 ```
 
 ```bash
 #!/usr/bin/env bash
-# ~/bin/jcode-focus
+# ~/bin/mona-focus
 tmux select-window -t "$(tmux list-windows -F '#{window_id} #{window_name}' \
-  | grep -F "$JCODE_FOCUS_TITLE" | head -1 | cut -d' ' -f1)"
+  | grep -F "$MONA_FOCUS_TITLE" | head -1 | cut -d' ' -f1)"
 ```
 
-Env override: `JCODE_FOCUS_HOOK` (empty value disables a config-file hook).
+Env override: `MONA_FOCUS_HOOK` (empty value disables a config-file hook).
 If the hook fails to start, jcode falls back to the built-in focus path.

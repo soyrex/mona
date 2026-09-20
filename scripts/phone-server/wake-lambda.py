@@ -10,8 +10,8 @@ from urllib.parse import quote
 
 INSTANCE_ID = os.environ.get("INSTANCE_ID", "i-08214cf66cd3f80c7")
 TOKEN = os.environ.get("WAKE_TOKEN", "REPLACE_WITH_WAKE_TOKEN")
-HOST = os.environ.get("JCODE_GATEWAY_HOST", "100.109.78.41")
-PORT = int(os.environ.get("JCODE_GATEWAY_PORT", "7643"))
+HOST = os.environ.get("MONA_GATEWAY_HOST", "100.109.78.41")
+PORT = int(os.environ.get("MONA_GATEWAY_PORT", "7643"))
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 PAIRING_CODE_RE = re.compile(r"Pairing code:\s+(\d{3})\s+(\d{3})")
@@ -58,7 +58,7 @@ def fetch_pair_code(ssm):
     host = shlex.quote(HOST)
     command = (
         "sudo -iu ec2-user env "
-        f"JCODE_GATEWAY_HOST={host} "
+        f"MONA_GATEWAY_HOST={host} "
         "/home/ec2-user/.local/bin/jcode pair"
     )
     command_id = ssm.send_command(
@@ -119,9 +119,9 @@ body{font-family:-apple-system,system-ui;background:#101314;color:#eee;display:f
 <p class="spin" id="hint">checking every 5s…</p><button id="pairbtn">Pair this phone</button><div id="pairout"></div>
 <script nonce="__NONCE__">
 const fragment = new URLSearchParams(location.hash.slice(1));
-if (fragment.get('t')) sessionStorage.setItem('jcode-wake-token', fragment.get('t'));
+if (fragment.get('t')) sessionStorage.setItem('mona-wake-token', fragment.get('t'));
 history.replaceState(null, '', location.pathname);
-const token = sessionStorage.getItem('jcode-wake-token');
+const token = sessionStorage.getItem('mona-wake-token');
 const api = async action => {
   if (!token) throw new Error('missing token; open the saved wake link');
   const r = await fetch(location.pathname, {method:'POST', cache:'no-store',

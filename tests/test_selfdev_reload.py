@@ -18,8 +18,8 @@ import sys
 import glob
 
 RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-SOCKET_PATH = os.path.join(RUNTIME_DIR, "jcode-debug.sock")
-JCODE_DIR = os.path.expanduser("~/.jcode")
+SOCKET_PATH = os.path.join(RUNTIME_DIR, "mona-debug.sock")
+MONA_DIR = os.path.expanduser("~/.jcode")
 
 def send_cmd(sock, cmd, session_id=None, timeout=60):
     """Send a debug command and get the response."""
@@ -171,9 +171,9 @@ def test_reload_context():
     print("=" * 60)
 
     context_candidates = sorted(
-        glob.glob(os.path.join(JCODE_DIR, "reload-context-*.json"))
+        glob.glob(os.path.join(MONA_DIR, "reload-context-*.json"))
     )
-    legacy_context_path = os.path.join(JCODE_DIR, "reload-context.json")
+    legacy_context_path = os.path.join(MONA_DIR, "reload-context.json")
     if os.path.exists(legacy_context_path):
         context_candidates.append(legacy_context_path)
 

@@ -211,9 +211,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tag", action="append", dest="tags", help="Run only cases carrying this tag. Repeatable.")
     parser.add_argument("--trials", type=int, default=1, help="Independent trials per case (no retry-until-hit).")
     parser.add_argument("--timeout", type=float, default=120.0, help="Seconds allowed per trial.")
-    parser.add_argument("--jcode", default=os.environ.get("JCODE_BIN", "jcode"))
-    parser.add_argument("--model", default=os.environ.get("JCODE_DISCOVERY_BENCHMARK_MODEL", "gpt-5.6-sol"))
-    parser.add_argument("--provider", default=os.environ.get("JCODE_DISCOVERY_BENCHMARK_PROVIDER"))
+    parser.add_argument("--jcode", default=os.environ.get("MONA_BIN", "mona"))
+    parser.add_argument("--model", default=os.environ.get("MONA_DISCOVERY_BENCHMARK_MODEL", "gpt-5.6-sol"))
+    parser.add_argument("--provider", default=os.environ.get("MONA_DISCOVERY_BENCHMARK_PROVIDER"))
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--min-recall", type=float, default=0.8, help="Required browse rate on `call` cases.")
     parser.add_argument("--min-precision", type=float, default=0.9, help="Required clean rate on `no-call` controls.")
@@ -694,7 +694,7 @@ def main() -> int:
     args.jcode = executable["path"]
 
     results: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="jcode-discovery-rate-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="mona-discovery-rate-") as temp_dir:
         root = Path(temp_dir)
         socket_path = root / "jcode.sock"
         server = start_server(args, socket_path)

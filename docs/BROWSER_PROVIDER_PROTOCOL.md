@@ -297,9 +297,9 @@ Request:
 
 ```json
 {
-  "client_session_id": "jcode_session_123",
+  "client_session_id": "mona_session_123",
   "browser_preference": "auto",
-  "isolation": "per_jcode_session",
+  "isolation": "per_mona_session",
   "attach": "prefer",
   "persist": true,
   "metadata": {
@@ -317,7 +317,7 @@ Response:
   "browser_family": "firefox",
   "browser_label": "Firefox",
   "attached_to_existing_browser": true,
-  "isolation": "per_jcode_session",
+  "isolation": "per_mona_session",
   "default_page_id": "page_1"
 }
 ```
@@ -609,7 +609,7 @@ The main `browser` tool should prefer the standard core and optional normalized 
 Provider-specific methods should only be used when:
 
 - the user explicitly asks for them
-- a jcode-side adapter knows how to use them safely
+- a mona-side adapter knows how to use them safely
 - or a future advanced/debug mode is enabled
 
 ### Rule 4: provider-native passthrough is allowed, but should be explicit

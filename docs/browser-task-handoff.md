@@ -50,7 +50,7 @@ orchestration.
 Run the browser regression suite through `selfdev test`:
 
 ```sh
-cargo test -p jcode-app-core --lib browser
+cargo test -p mona-app-core --lib browser
 ```
 
 For live acceptance, check browser readiness, create a dedicated disposable

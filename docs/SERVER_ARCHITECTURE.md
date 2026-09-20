@@ -18,8 +18,8 @@ can reconnect transparently after disconnects or server reloads.
 │                                                                             │
 │  jcode serve                                                                │
 │  ├── Unix socket:  /run/user/$UID/jcode.sock                                │
-│  ├── Debug socket: /run/user/$UID/jcode-debug.sock                          │
-│  ├── Registry:     ~/.jcode/servers.json                                    │
+│  ├── Debug socket: /run/user/$UID/mona-debug.sock                          │
+│  ├── Registry:     ~/.mona/servers.json                                    │
 │  ├── Provider (Claude/OpenAI/OpenRouter)                                    │
 │  ├── MCP pool (shared across sessions)                                      │
 │  └── Sessions:                                                              │
@@ -51,7 +51,7 @@ The server gets a random adjective/verb name on startup (e.g., "blazing").
 Each session gets an animal noun (e.g., "fox"). Together they form a natural
 phrase displayed in the UI: "🔥 blazing 🦊 fox".
 
-The server name persists across reloads via the registry (`~/.jcode/servers.json`).
+The server name persists across reloads via the registry (`~/.mona/servers.json`).
 When the server execs into a new binary on `/reload`, the new process registers
 with a fresh name. Stale entries are cleaned up automatically.
 
@@ -80,8 +80,8 @@ The server is fully detached from the spawning client via `setsid()`, so killing
 any client never affects the server or other clients.
 
 Long-lived deployments can give the daemon a stable client-visible identity with
-`jcode serve --server-name <name>` or the `JCODE_SERVER_NAME` environment
-variable. The optional `JCODE_SERVER_DISPLAY_NAME` environment variable is also
+`jcode serve --server-name <name>` or the `MONA_SERVER_NAME` environment
+variable. The optional `MONA_SERVER_DISPLAY_NAME` environment variable is also
 accepted for service managers that prefer a display-oriented name. CLI input wins
 over environment input. Names are normalized to registry-safe lowercase labels,
 so `mount-cloud/fabian` displays as `mount-cloud-fabian`.
@@ -91,7 +91,7 @@ so `mount-cloud/fabian` displays as `mount-cloud-fabian`.
 The server shuts down when:
 - **Idle timeout**: no clients connected and no live headless swarm workers for
   5 minutes. The shared-server timeout is fixed at 300 seconds
-  (`IDLE_TIMEOUT_SECS` in `crates/jcode-app-core/src/server.rs`), not configurable
+  (`IDLE_TIMEOUT_SECS` in `crates/mona-app-core/src/server.rs`), not configurable
   through `[server]`. The monitor checks every 10 seconds, so shutdown can occur
   slightly later than five minutes.
 - **Manual**: server process is killed
@@ -102,7 +102,7 @@ use a separate lifecycle policy.
 
 ### Session Ownership Markers (`active_pids`)
 
-`~/.jcode/active_pids/<session_id>` contains the PID of the process that owns the
+`~/.mona/active_pids/<session_id>` contains the PID of the process that owns the
 session. In server mode this is the daemon PID, so multiple sessions can share
 the same PID. Despite the directory name, “active” means process ownership, not
 that a terminal window is open, a client is connected, or a model is generating.
@@ -154,7 +154,7 @@ reload, network issue, etc.):
 ```
 /run/user/$UID/
 ├── jcode.sock          # Main communication socket
-└── jcode-debug.sock    # Debug/testing socket
+└── mona-debug.sock    # Debug/testing socket
 ```
 
 ## Self-Dev Mode

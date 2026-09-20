@@ -21,10 +21,10 @@ from typing import Any
 
 
 DISCORD_LIMIT = 2_000
-MARKER_PREFIX = "jcode-discord-announced"
+MARKER_PREFIX = "mona-discord-announced"
 PLATFORM_BLOCK = re.compile(
-    r"\n?<!-- jcode-platform-availability:start -->.*?"
-    r"<!-- jcode-platform-availability:end -->\n?",
+    r"\n?<!-- mona-platform-availability:start -->.*?"
+    r"<!-- mona-platform-availability:end -->\n?",
     flags=re.DOTALL,
 )
 
@@ -68,7 +68,7 @@ def github_request(
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "User-Agent": "jcode-release-bot/2.0",
+            "User-Agent": "mona-release-bot/2.0",
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
@@ -113,7 +113,7 @@ def post_to_discord(*, webhook_url: str, content: str) -> dict[str, Any]:
         ).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "User-Agent": "jcode-release-bot/2.0",
+            "User-Agent": "mona-release-bot/2.0",
         },
     )
     with urllib.request.urlopen(request, timeout=30) as response:

@@ -27,10 +27,10 @@ A jcode code change is required when the sponsor needs:
 The hosted catalog and discovery service are not stored in this repository.
 Coordinate that change with the service owner. The client-side contract is in:
 
-- `crates/jcode-app-core/src/tool/discover.rs`;
-- `crates/jcode-base/src/sponsors.rs`;
-- `crates/jcode-base/src/sponsors/provenance.rs`;
-- `crates/jcode-tui/src/tui/app/sponsor_disclosure.rs`; and
+- `crates/mona-app-core/src/tool/discover.rs`;
+- `crates/mona-base/src/sponsors.rs`;
+- `crates/mona-base/src/sponsors/provenance.rs`;
+- `crates/mona-tui/src/tui/app/sponsor_disclosure.rs`; and
 - `TELEMETRY.md`.
 
 ## 1. Intake and approval
@@ -68,7 +68,7 @@ Reject or pause onboarding if any item cannot be verified.
 ## 2. Choose or add a category
 
 Current categories are defined by `DISCOVERY_CATEGORIES` in
-`crates/jcode-base/src/sponsors.rs`. Category values are lowercase slugs.
+`crates/mona-base/src/sponsors.rs`. Category values are lowercase slugs.
 
 Use an existing category whenever it accurately describes the capability. To
 add a category:
@@ -135,7 +135,7 @@ enable provenance tagging or coarse usage metering.
 The default client sends `GET https://api.jcode.sh/v1/discovery` with a
 three-second timeout and a 64 KiB maximum response. It sends a
 `User-Agent: jcode/<version>` header and a random
-`x-jcode-discovery-request-id` correlation header.
+`x-mona-discovery-request-id` correlation header.
 
 Current clients also send coarse provenance headers: the random local session
 ID, whether session metadata was available, self-dev/debug/canary flags, tool
@@ -147,7 +147,7 @@ transcript content, file paths, account identity, credentials, or user-authored
 text.
 
 Runs launched by `scripts/benchmark_discovery.py` also send
-`x-jcode-discovery-benchmark: 1`. The service must retain that marker with its
+`x-mona-discovery-benchmark: 1`. The service must retain that marker with its
 request logs so benchmark traffic can be excluded from ordinary discovery and
 sponsor reporting.
 
@@ -180,7 +180,7 @@ For ordinary non-benchmark traffic, the service stores both raw summaries in
 `discovery_events`. When a reviewed recipient is configured for a listed
 sponsor, it also sends that sponsor the browse or select summaries relevant to
 its listing. Recipient configuration is explicit and empty by default. Runs
-marked `x-jcode-discovery-benchmark: 1` remain stored with
+marked `x-mona-discovery-benchmark: 1` remain stored with
 `benchmark_run = 1` for auditability but are never delivered as sponsor reports.
 
 ### Browse response
@@ -323,10 +323,10 @@ server. Confirm:
 For client-side changes, run at minimum:
 
 ```bash
-cargo test -p jcode-app-core tool::discover
-cargo test -p jcode-base sponsors
-cargo test -p jcode-base discovery_provenance
-cargo test -p jcode-tui sponsor_disclosure
+cargo test -p mona-app-core tool::discover
+cargo test -p mona-base sponsors
+cargo test -p mona-base discovery_provenance
+cargo test -p mona-tui sponsor_disclosure
 cargo check -p jcode
 ```
 

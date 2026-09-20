@@ -17,7 +17,7 @@ sessions, not simultaneous model requests or unique people.
 
 - Applied additive migration `0026_concurrency_tracking.sql`.
 - Deployed Worker version `24b27b8a-f8b6-469a-a83b-7050b952262f`.
-- Added the dedicated `jcode_concurrency_firehose` backup dataset.
+- Added the dedicated `mona_concurrency_firehose` backup dataset.
 - Verified the real Rust tracking API delivered four start/end pairs to D1,
   including exact end peaks of **3, 3, 3, 1**, with root/child peaks **2/1**
   for the overlapping group and **1/0** after every prior owner closed.
@@ -64,7 +64,7 @@ disposable installation ID. Do not remove the CI tag to make a report nonempty.
 
 ```sh
 # From the repository root, after deploying the Worker:
-scripts/dev_cargo.sh run -p jcode-telemetry-core --example concurrency_probe \
+scripts/dev_cargo.sh run -p mona-telemetry-core --example concurrency_probe \
   -- --emit-ci-telemetry
 ```
 

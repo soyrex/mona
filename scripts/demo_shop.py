@@ -41,10 +41,10 @@ PRODUCTS = {
 
 
 def state_path() -> Path:
-    configured = os.environ.get("JCODE_DEMO_SHOP_STATE")
+    configured = os.environ.get("MONA_DEMO_SHOP_STATE")
     if configured:
         return Path(configured).expanduser()
-    return Path(f"/tmp/jcode-demo-shop-{os.getuid()}.json")
+    return Path(f"/tmp/mona-demo-shop-{os.getuid()}.json")
 
 
 def empty_state() -> dict[str, Any]:
@@ -107,7 +107,7 @@ def command_search(args: argparse.Namespace) -> int:
             f"shipping {money(float(product['shipping']))} | seller {product['seller']} | "
             f"rating {product['rating']}/5"
         )
-    print("Add one with: jcode-demo-shop add <sku>")
+    print("Add one with: mona-demo-shop add <sku>")
     return 0
 
 
@@ -136,8 +136,8 @@ def command_add(args: argparse.Namespace) -> int:
     state["cart"] = [args.sku]
     save_state(state)
     print(f"Added {args.sku}. The demo cart contains one item.")
-    print("Review it with: jcode-demo-shop cart")
-    print("Continue with: jcode-demo-shop checkout")
+    print("Review it with: mona-demo-shop cart")
+    print("Continue with: mona-demo-shop checkout")
     print(
         "The simulated checkout only calculates the final total and reports payment "
         "availability; it cannot create a card, charge anything, or place an order."
@@ -204,7 +204,7 @@ def command_prepare_checkout(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="jcode-demo-shop",
+        prog="mona-demo-shop",
         description="Local-only storefront simulator for a safe checkout demo.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

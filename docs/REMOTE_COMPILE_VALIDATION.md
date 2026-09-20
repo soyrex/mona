@@ -2,13 +2,13 @@
 
 ## Observed checks
 
-- `cargo check -p jcode-app-core --no-default-features`: passed.
+- `cargo check -p mona-app-core --no-default-features`: passed.
 - `cargo check -p jcode --no-default-features`: passed.
-- `cargo test --lib -p jcode-app-core --no-default-features compile_remote`:
+- `cargo test --lib -p mona-app-core --no-default-features compile_remote`:
   26 passed (12 client/transport, 13 source snapshot, 1 agent schema regression).
-- `cargo test -p jcode-tool-core subcall_ids_are_parent_scoped_and_retry_stable`:
+- `cargo test -p mona-tool-core subcall_ids_are_parent_scoped_and_retry_stable`:
   passed.
-- `cargo test --lib -p jcode-app-core --no-default-features tool::batch`:
+- `cargo test --lib -p mona-app-core --no-default-features tool::batch`:
   15 existing batch regressions passed.
 - New Rust modules pass targeted `rustfmt --check`. `git diff --check` passed.
 

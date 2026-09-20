@@ -13,7 +13,7 @@ struct SpawnedWindowsServer {
 }
 
 impl SpawnedWindowsServer {
-    fn jcode_binary() -> std::path::PathBuf {
+    fn mona_binary() -> std::path::PathBuf {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let release_binary = manifest_dir
             .join("target")
@@ -37,12 +37,12 @@ impl SpawnedWindowsServer {
         std::fs::create_dir_all(&runtime_dir)?;
         std::fs::create_dir_all(&install_dir)?;
 
-        let socket_path = runtime_dir.join("jcode-windows-lifecycle.sock");
-        let debug_socket_path = runtime_dir.join("jcode-windows-lifecycle-debug.sock");
+        let socket_path = runtime_dir.join("mona-windows-lifecycle.sock");
+        let debug_socket_path = runtime_dir.join("mona-windows-lifecycle-debug.sock");
 
         let stdout_file = std::fs::File::create(&stdout_path)?;
         let stderr_file = std::fs::File::create(&stderr_path)?;
-        let mut command = Command::new(Self::jcode_binary());
+        let mut command = Command::new(Self::mona_binary());
         command
             .arg("--no-update")
             .arg("--socket")
@@ -52,17 +52,17 @@ impl SpawnedWindowsServer {
             .arg("--model")
             .arg("windows-e2e-model")
             .arg("serve")
-            .env_remove("JCODE_TEST_SESSION")
-            .env("JCODE_HOME", &home_dir)
-            .env("JCODE_RUNTIME_DIR", &runtime_dir)
-            .env("JCODE_INSTALL_DIR", &install_dir)
-            .env("JCODE_NO_TELEMETRY", "1")
-            .env("JCODE_OPENAI_COMPAT_API_BASE", "http://127.0.0.1:9/v1")
-            .env("JCODE_OPENAI_COMPAT_DEFAULT_MODEL", "windows-e2e-model")
-            .env("JCODE_OPENAI_COMPAT_LOCAL_ENABLED", "1")
-            .env("JCODE_DEBUG_CONTROL", "1")
-            .env("JCODE_TEMP_SERVER", "1")
-            .env("JCODE_SERVER_OWNER_PID", std::process::id().to_string())
+            .env_remove("MONA_TEST_SESSION")
+            .env("MONA_HOME", &home_dir)
+            .env("MONA_RUNTIME_DIR", &runtime_dir)
+            .env("MONA_INSTALL_DIR", &install_dir)
+            .env("MONA_NO_TELEMETRY", "1")
+            .env("MONA_OPENAI_COMPAT_API_BASE", "http://127.0.0.1:9/v1")
+            .env("MONA_OPENAI_COMPAT_DEFAULT_MODEL", "windows-e2e-model")
+            .env("MONA_OPENAI_COMPAT_LOCAL_ENABLED", "1")
+            .env("MONA_DEBUG_CONTROL", "1")
+            .env("MONA_TEMP_SERVER", "1")
+            .env("MONA_SERVER_OWNER_PID", std::process::id().to_string())
             .env("RUST_BACKTRACE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout_file))
@@ -88,22 +88,22 @@ impl SpawnedWindowsServer {
 
     fn apply_env<'a>(&self, command: &'a mut Command) -> &'a mut Command {
         command
-            .env_remove("JCODE_TEST_SESSION")
-            .env("JCODE_HOME", &self.home_dir)
-            .env("JCODE_RUNTIME_DIR", &self.runtime_dir)
-            .env("JCODE_INSTALL_DIR", &self.install_dir)
-            .env("JCODE_NO_TELEMETRY", "1")
-            .env("JCODE_OPENAI_COMPAT_API_BASE", "http://127.0.0.1:9/v1")
-            .env("JCODE_OPENAI_COMPAT_DEFAULT_MODEL", "windows-e2e-model")
-            .env("JCODE_OPENAI_COMPAT_LOCAL_ENABLED", "1")
-            .env("JCODE_DEBUG_CONTROL", "1")
-            .env("JCODE_TEMP_SERVER", "1")
-            .env("JCODE_SERVER_OWNER_PID", std::process::id().to_string())
+            .env_remove("MONA_TEST_SESSION")
+            .env("MONA_HOME", &self.home_dir)
+            .env("MONA_RUNTIME_DIR", &self.runtime_dir)
+            .env("MONA_INSTALL_DIR", &self.install_dir)
+            .env("MONA_NO_TELEMETRY", "1")
+            .env("MONA_OPENAI_COMPAT_API_BASE", "http://127.0.0.1:9/v1")
+            .env("MONA_OPENAI_COMPAT_DEFAULT_MODEL", "windows-e2e-model")
+            .env("MONA_OPENAI_COMPAT_LOCAL_ENABLED", "1")
+            .env("MONA_DEBUG_CONTROL", "1")
+            .env("MONA_TEMP_SERVER", "1")
+            .env("MONA_SERVER_OWNER_PID", std::process::id().to_string())
             .env("RUST_BACKTRACE", "1")
     }
 
-    fn jcode_command(&self) -> Command {
-        let mut command = Command::new(Self::jcode_binary());
+    fn mona_command(&self) -> Command {
+        let mut command = Command::new(Self::mona_binary());
         self.apply_env(&mut command);
         command
     }
@@ -116,7 +116,7 @@ impl SpawnedWindowsServer {
         let stderr_path = self._temp_root.path().join(format!("{label}-stderr.log"));
         let stdout_file = std::fs::File::create(&stdout_path)?;
         let stderr_file = std::fs::File::create(&stderr_path)?;
-        let mut command = Command::new(Self::jcode_binary());
+        let mut command = Command::new(Self::mona_binary());
         self.apply_env(&mut command)
             .arg("--no-update")
             .arg("--socket")
@@ -169,7 +169,7 @@ impl SpawnedWindowsServer {
             }
         }
 
-        if let Ok(artifact_root) = std::env::var("JCODE_E2E_ARTIFACT_DIR") {
+        if let Ok(artifact_root) = std::env::var("MONA_E2E_ARTIFACT_DIR") {
             let safe_label: String = label
                 .chars()
                 .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
@@ -180,7 +180,7 @@ impl SpawnedWindowsServer {
             let _ = std::fs::copy(&self.stderr_path, artifact_dir.join("server-stderr.log"));
             let logs_dir = self.home_dir.join("logs");
             if let Ok(entries) = std::fs::read_dir(logs_dir) {
-                let copied_logs_dir = artifact_dir.join("jcode-logs");
+                let copied_logs_dir = artifact_dir.join("mona-logs");
                 let _ = std::fs::create_dir_all(&copied_logs_dir);
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -236,7 +236,7 @@ async fn wait_for_server_unreachable(socket_path: &std::path::Path) -> Result<()
 #[tokio::test]
 async fn windows_binary_server_accepts_clients_and_debug_cli() -> Result<()> {
     let _env = setup_test_env()?;
-    let server = SpawnedWindowsServer::spawn("jcode-windows-lifecycle-")?;
+    let server = SpawnedWindowsServer::spawn("mona-windows-lifecycle-")?;
 
     let result = async {
         server.wait_ready().await?;
@@ -256,11 +256,11 @@ async fn windows_binary_server_accepts_clients_and_debug_cli() -> Result<()> {
             info.get("debug_control_enabled")
                 .and_then(|value| value.as_bool())
                 == Some(true),
-            "server should honor JCODE_DEBUG_CONTROL in Windows e2e"
+            "server should honor MONA_DEBUG_CONTROL in Windows e2e"
         );
 
         let output = server
-            .jcode_command()
+            .mona_command()
             .arg("--no-update")
             .arg("--socket")
             .arg(&server.socket_path)
@@ -292,7 +292,7 @@ async fn windows_binary_server_accepts_clients_and_debug_cli() -> Result<()> {
 #[tokio::test]
 async fn windows_binary_server_rebinds_named_pipe_after_exit() -> Result<()> {
     let _env = setup_test_env()?;
-    let mut first = SpawnedWindowsServer::spawn("jcode-windows-rebind-")?;
+    let mut first = SpawnedWindowsServer::spawn("mona-windows-rebind-")?;
 
     let result = async {
         first.wait_ready().await?;

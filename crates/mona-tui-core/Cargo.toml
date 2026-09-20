@@ -1,0 +1,10 @@
+[package]
+name = "mona-tui-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+crossterm = "0.29"
+serde = { version = "1", features = ["derive"] }
+mona-memory-types = { path = "../mona-memory-types" }

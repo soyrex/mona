@@ -29,13 +29,13 @@ class ImportCLI(unittest.TestCase):
     def setUp(self):
         if BINARY is None:
             self.skipTest('supply a built CLI path')
-        self.tmp = tempfile.TemporaryDirectory(prefix='jcode-import-cli-')
+        self.tmp = tempfile.TemporaryDirectory(prefix='mona-import-cli-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.home = self.root / 'data'
         self.env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(self.root),
-                    'JCODE_HOME': str(self.home), 'XDG_CONFIG_HOME': str(self.root / 'config'),
-                    'JCODE_TELEMETRY': 'off', 'HTTPS_PROXY': 'http://127.0.0.1:9',
+                    'MONA_HOME': str(self.home), 'XDG_CONFIG_HOME': str(self.root / 'config'),
+                    'MONA_TELEMETRY': 'off', 'HTTPS_PROXY': 'http://127.0.0.1:9',
                     'HTTP_PROXY': 'http://127.0.0.1:9', 'ALL_PROXY': 'http://127.0.0.1:9', 'NO_PROXY': ''}
 
     def command(self, provider='openai'):

@@ -3,7 +3,7 @@
   "date": "2026-09-03",
   "features": [
     "Add claude-fable-5-1 to the direct Anthropic catalog",
-    "Add agents.swarm_effort config pin and JCODE_SWARM_EFFORT override; show worker effort in swarm list"
+    "Add agents.swarm_effort config pin and MONA_SWARM_EFFORT override; show worker effort in swarm list"
   ],
   "fixes": [
     "Persist sessions created with a title before the first visible message",

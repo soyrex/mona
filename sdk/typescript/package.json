@@ -1,5 +1,5 @@
 {
-  "name": "@1jehuang/jcode-sdk",
+  "name": "@1jehuang/mona-sdk",
   "version": "1.2.0",
   "description": "TypeScript SDK for the jcode harness API (protocol v1)",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "typescript": "^5.7.2"
   },
   "keywords": [
-    "jcode",
+    "mona",
     "agent",
     "sdk",
     "llm",
@@ -58,11 +58,11 @@
     "ajv": "^8.20.0"
   },
   "optionalDependencies": {
-    "@1jehuang/jcode-darwin-arm64": "1.2.0",
-    "@1jehuang/jcode-darwin-x64": "1.2.0",
-    "@1jehuang/jcode-linux-arm64": "1.2.0",
-    "@1jehuang/jcode-linux-x64": "1.2.0",
-    "@1jehuang/jcode-win32-arm64": "1.2.0",
-    "@1jehuang/jcode-win32-x64": "1.2.0"
+    "@1jehuang/mona-darwin-arm64": "1.2.0",
+    "@1jehuang/mona-darwin-x64": "1.2.0",
+    "@1jehuang/mona-linux-arm64": "1.2.0",
+    "@1jehuang/mona-linux-x64": "1.2.0",
+    "@1jehuang/mona-win32-arm64": "1.2.0",
+    "@1jehuang/mona-win32-x64": "1.2.0"
   }
 }

@@ -24,8 +24,8 @@ is reused.
 
 The backend is resolved from environment at `GmailClient::new()`:
 
-- `JCODE_GMAIL_BACKEND=direct` (or unset) -> direct Google backend.
-- `JCODE_GMAIL_BACKEND=composio` -> Composio backend (requires `COMPOSIO_API_KEY`).
+- `MONA_GMAIL_BACKEND=direct` (or unset) -> direct Google backend.
+- `MONA_GMAIL_BACKEND=composio` -> Composio backend (requires `COMPOSIO_API_KEY`).
 
 If `composio` is requested but `COMPOSIO_API_KEY` is missing, jcode warns and
 falls back to `direct`.
@@ -52,7 +52,7 @@ Once `COMPOSIO_API_KEY` and `COMPOSIO_GMAIL_AUTH_CONFIG_ID` are set, the user
 3. The user approves Gmail access on Google's consent screen. Because Composio
    owns a Google-verified app, there is no "unverified app" warning.
 4. jcode polls `GET /connected_accounts/{id}` until the connection is `ACTIVE`,
-   then persists it to `~/.jcode/composio_gmail.json`.
+   then persists it to `~/.mona/composio_gmail.json`.
 
 Future sessions load the persisted `connected_account_id`, so the connect step
 is a one-time action per account. Tool calls before a connection exists return
@@ -69,7 +69,7 @@ a hint telling the agent to run `action: "connect"` first.
    Note the resulting `connected_account_id` if you want to pin it.
 3. Export the variables:
    ```bash
-   export JCODE_GMAIL_BACKEND=composio
+   export MONA_GMAIL_BACKEND=composio
    export COMPOSIO_API_KEY="ck_..."
    # optional:
    export COMPOSIO_GMAIL_CONNECTED_ACCOUNT_ID="ca_..."

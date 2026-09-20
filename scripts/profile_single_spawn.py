@@ -96,7 +96,7 @@ def reply_queries(master_fd: int, buffer: bytes) -> bytes:
 
 
 def latest_log_file(log_dir: Path) -> Path:
-    logs = sorted(log_dir.glob("jcode-*.log"), key=lambda p: p.stat().st_mtime)
+    logs = sorted(log_dir.glob("mona-*.log"), key=lambda p: p.stat().st_mtime)
     if not logs:
         raise RuntimeError(f"no log files found in {log_dir}")
     return logs[-1]
@@ -111,25 +111,25 @@ def extract_timing_lines(log_path: Path) -> list[str]:
 
 
 def profile_single_spawn(binary: str, cwd: str, timeout_s: float) -> dict:
-    root = Path(tempfile.mkdtemp(prefix="jcode-single-profile-"))
+    root = Path(tempfile.mkdtemp(prefix="mona-single-profile-"))
     home = root / "home"
     runtime_dir = root / "run"
     socket_path = runtime_dir / "jcode.sock"
-    debug_socket_path = runtime_dir / "jcode-debug.sock"
+    debug_socket_path = runtime_dir / "mona-debug.sock"
     home.mkdir(parents=True, exist_ok=True)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.update(
         {
-            "JCODE_HOME": str(home),
-            "JCODE_RUNTIME_DIR": str(runtime_dir),
-            "JCODE_SOCKET": str(socket_path),
-            "JCODE_DEBUG_SOCKET": str(debug_socket_path),
-            "JCODE_SWARM_ENABLED": "0",
-            "JCODE_NO_TELEMETRY": "1",
-            "JCODE_TRACE": "1",
-            "JCODE_TEMP_SERVER": "1",
-            "JCODE_SERVER_OWNER_PID": str(os.getpid()),
+            "MONA_HOME": str(home),
+            "MONA_RUNTIME_DIR": str(runtime_dir),
+            "MONA_SOCKET": str(socket_path),
+            "MONA_DEBUG_SOCKET": str(debug_socket_path),
+            "MONA_SWARM_ENABLED": "0",
+            "MONA_NO_TELEMETRY": "1",
+            "MONA_TRACE": "1",
+            "MONA_TEMP_SERVER": "1",
+            "MONA_SERVER_OWNER_PID": str(os.getpid()),
         }
     )
 
@@ -186,7 +186,7 @@ def profile_single_spawn(binary: str, cwd: str, timeout_s: float) -> dict:
                 buffer += chunk
                 buffer = reply_queries(master_fd, buffer)
                 lower = buffer.lower()
-                if b"loading session" in lower or b"jcode" in lower or len(buffer) > 4096:
+                if b"loading session" in lower or b"mona" in lower or len(buffer) > 4096:
                     if time.perf_counter() - last_output_at >= settle_after_output_s:
                         break
             elif last_output_at is not None and time.perf_counter() - last_output_at >= settle_after_output_s:

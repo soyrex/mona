@@ -18,7 +18,7 @@ metric is there to help users evaluate palettes *they* choose, and to let
 
 ## Configuring colors
 
-Colors live in `~/.jcode/config.toml`:
+Colors live in `~/.mona/config.toml`:
 
 ```toml
 [display.colors]
@@ -205,7 +205,7 @@ backgrounds.
 
 ## Adding a role
 
-1. Add the variant to `Role` in `crates/jcode-tui-style/src/palette.rs`, list it
+1. Add the variant to `Role` in `crates/mona-tui-style/src/palette.rs`, list it
    in `ALL_ROLES`, and give it a `key()` and a `default_rgb()` equal to the value
    currently hard-coded at its call sites. Defaults must preserve today's look.
 2. If it is a background, say so in `is_background()`; backgrounds are graded on

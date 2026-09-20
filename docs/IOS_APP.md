@@ -71,7 +71,7 @@ Server side (already shipped, unchanged):
 - `GET /health` for reachability checks.
 - `ws://host:7643/ws?token=...` upgrades to a WebSocket carrying the same
   newline-delimited JSON protocol as Unix-socket TUI clients
-  (`crates/jcode-protocol/src/wire.rs`, `#[serde(tag = "type")]`).
+  (`crates/mona-protocol/src/wire.rs`, `#[serde(tag = "type")]`).
 
 Client v1 requests: `subscribe`, `message`, `cancel`, `soft_interrupt`,
 `ping`, `get_history`, `resume_session`, `set_model`, `rename_session`,

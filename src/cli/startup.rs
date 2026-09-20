@@ -43,13 +43,13 @@ pub async fn run() -> Result<()> {
     // so it no longer blocks startup. Memory-event logs have a separate,
     // longer (14-day) retention, so prune them on their own background thread.
     std::thread::Builder::new()
-        .name("jcode-memlog-cleanup".to_string())
+        .name("mona-memlog-cleanup".to_string())
         .spawn(crate::memory_log::cleanup_old_memory_logs)
         .ok();
     // Prune stale per-session `.bak` recovery copies (never the transcripts
     // themselves) so the sessions directory does not grow without bound.
     std::thread::Builder::new()
-        .name("jcode-session-bak-prune".to_string())
+        .name("mona-session-bak-prune".to_string())
         .spawn(crate::session::prune_old_session_backups)
         .ok();
     logging::info("jcode starting");
@@ -70,7 +70,7 @@ pub async fn run() -> Result<()> {
     );
 
     // Register externally-implemented provider runtimes with the base
-    // provider registry. These crates sit downstream of jcode-base (so
+    // provider registry. These crates sit downstream of mona-base (so
     // provider edits do not rebuild the app spine), which means base cannot
     // name their concrete types; this composition root wires them up instead.
     register_external_provider_runtimes();
@@ -197,7 +197,7 @@ fn is_telemetry_subcommand_invocation(
     false
 }
 
-/// Register provider runtimes that live downstream of `jcode-base` with the
+/// Register provider runtimes that live downstream of `mona-base` with the
 /// base crate's external provider registry. Keep every downstream runtime
 /// registration in this one function so the composition-root wiring stays
 /// discoverable as more providers move out of the base crate.
@@ -205,39 +205,39 @@ pub fn register_external_provider_runtimes() {
     crate::provider::external::register_external_provider(
         crate::provider::external::GROK_BUILD_RUNTIME,
         || {
-            let mut process = jcode_provider_grok_build_runtime::GrokBuildProcess::from_env();
+            let mut process = mona_provider_grok_build_runtime::GrokBuildProcess::from_env();
             process.command = crate::auth::grok_build::cli_path();
             std::sync::Arc::new(
-                jcode_provider_grok_build_runtime::GrokBuildProvider::with_process(process),
+                mona_provider_grok_build_runtime::GrokBuildProvider::with_process(process),
             )
         },
     );
     crate::provider::external::register_external_provider(
         crate::provider::external::GEMINI_RUNTIME,
-        || std::sync::Arc::new(jcode_provider_gemini_runtime::GeminiProvider::new()),
+        || std::sync::Arc::new(mona_provider_gemini_runtime::GeminiProvider::new()),
     );
     crate::provider::external::register_external_provider(
         crate::provider::external::CURSOR_RUNTIME,
-        || std::sync::Arc::new(jcode_provider_cursor_runtime::CursorCliProvider::new()),
+        || std::sync::Arc::new(mona_provider_cursor_runtime::CursorCliProvider::new()),
     );
     crate::provider::external::register_external_provider(
         crate::provider::external::ANTIGRAVITY_RUNTIME,
-        || std::sync::Arc::new(jcode_provider_antigravity_runtime::AntigravityProvider::new()),
+        || std::sync::Arc::new(mona_provider_antigravity_runtime::AntigravityProvider::new()),
     );
     crate::provider::external::register_external_provider(
         crate::provider::external::CLAUDE_CLI_RUNTIME,
-        || std::sync::Arc::new(jcode_provider_claude_cli_runtime::ClaudeProvider::new()),
+        || std::sync::Arc::new(mona_provider_claude_cli_runtime::ClaudeProvider::new()),
     );
     crate::provider::external::register_external_provider(
         crate::provider::external::ANTHROPIC_RUNTIME,
-        || std::sync::Arc::new(jcode_provider_anthropic_runtime::AnthropicProvider::new()),
+        || std::sync::Arc::new(mona_provider_anthropic_runtime::AnthropicProvider::new()),
     );
     // OpenRouter serves several identities (aggregator, pinned API-key
     // runtime, direct OpenAI-compatible profiles, named config profiles)
     // through one concrete type, so it registers a parameterized factory.
     crate::provider::external::register_openrouter_factory(|spec| {
         use crate::provider::external::OpenRouterRuntimeSpec;
-        use jcode_provider_openrouter_runtime::OpenRouterProvider;
+        use mona_provider_openrouter_runtime::OpenRouterProvider;
         let provider: std::sync::Arc<dyn crate::provider::Provider> = match spec {
             OpenRouterRuntimeSpec::Default => std::sync::Arc::new(OpenRouterProvider::new()?),
             OpenRouterRuntimeSpec::OpenRouterApiKey => {
@@ -253,10 +253,10 @@ pub fn register_external_provider_runtimes() {
         Ok(provider)
     });
     crate::provider::external::register_profile_catalog_refresh(
-        jcode_provider_openrouter_runtime::maybe_schedule_openai_compatible_profile_catalog_refresh,
+        mona_provider_openrouter_runtime::maybe_schedule_openai_compatible_profile_catalog_refresh,
     );
     crate::provider::external::register_standard_openrouter_catalog_refresh(
-        jcode_provider_openrouter_runtime::maybe_schedule_standard_openrouter_catalog_refresh,
+        mona_provider_openrouter_runtime::maybe_schedule_standard_openrouter_catalog_refresh,
     );
     // API-backed OpenAI routes use Codex/platform credentials. The runtime is
     // still registered without them so browser-backed ChatGPT models remain
@@ -265,8 +265,8 @@ pub fn register_external_provider_runtimes() {
         crate::provider::external::OPENAI_RUNTIME,
         || {
             let provider = match crate::auth::codex::load_credentials() {
-                Ok(credentials) => jcode_provider_openai_runtime::OpenAIProvider::new(credentials),
-                Err(_) => jcode_provider_openai_runtime::OpenAIProvider::new_browser_only(),
+                Ok(credentials) => mona_provider_openai_runtime::OpenAIProvider::new(credentials),
+                Err(_) => mona_provider_openai_runtime::OpenAIProvider::new_browser_only(),
             };
             Some(std::sync::Arc::new(provider) as std::sync::Arc<dyn crate::provider::Provider>)
         },
@@ -279,9 +279,9 @@ pub fn register_external_provider_runtimes() {
         crate::provider::external::COPILOT_RUNTIME,
         || {
             let provider = std::sync::Arc::new(
-                jcode_provider_copilot_runtime::CopilotApiProvider::new().ok()?,
+                mona_provider_copilot_runtime::CopilotApiProvider::new().ok()?,
             );
-            let eager_tier_detection = std::env::var("JCODE_NON_INTERACTIVE").is_err();
+            let eager_tier_detection = std::env::var("MONA_NON_INTERACTIVE").is_err();
             if eager_tier_detection && tokio::runtime::Handle::try_current().is_ok() {
                 let p_clone = std::sync::Arc::clone(&provider);
                 tokio::spawn(async move {
@@ -312,7 +312,7 @@ fn parse_and_prepare_args(args: Args) -> Result<Args> {
     validate_remote_working_dir(args.remote_working_dir.as_deref())?;
 
     if args.trace {
-        crate::env::set_var("JCODE_TRACE", "1");
+        crate::env::set_var("MONA_TRACE", "1");
     }
 
     if let Some(ref socket) = args.socket {
@@ -465,7 +465,7 @@ fn source_update_check_status(result: anyhow::Result<Option<bool>>) -> crate::bu
 
     match result {
         Ok(Some(true)) => UpdateStatus::Available {
-            current: jcode_build_meta::version().to_string(),
+            current: mona_build_meta::version().to_string(),
             latest: "latest source".to_string(),
         },
         Ok(Some(false)) => UpdateStatus::UpToDate,
@@ -551,7 +551,7 @@ mod tests {
         else {
             panic!("a source update must remain available");
         };
-        assert_eq!(current, jcode_build_meta::version());
+        assert_eq!(current, mona_build_meta::version());
         assert_eq!(latest, "latest source");
     }
 
@@ -664,18 +664,18 @@ mod tests {
     #[test]
     fn telemetry_subcommand_skips_startup_telemetry() {
         assert!(is_telemetry_subcommand_invocation([
-            "jcode",
+            "mona",
             "telemetry",
             "disable"
         ]));
         assert!(is_telemetry_subcommand_invocation([
-            "jcode",
+            "mona",
             "--no-update",
             "telemetry",
             "disable"
         ]));
         assert!(is_telemetry_subcommand_invocation([
-            "jcode",
+            "mona",
             "--provider",
             "openai",
             "telemetry",
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn telemetry_prompt_does_not_skip_normal_startup_telemetry() {
         assert!(!is_telemetry_subcommand_invocation([
-            "jcode",
+            "mona",
             "run",
             "telemetry"
         ]));
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn parses_mcp_tool_exposure_flags() {
         let args = parse_args(&[
-            "jcode",
+            "mona",
             "--mcp-tools",
             "deferred",
             "--mcp-tools-token-threshold",
@@ -709,19 +709,19 @@ mod tests {
 
     #[test]
     fn auto_install_allowed_without_live_terminal() {
-        let args = parse_args(&["jcode", "login"]);
+        let args = parse_args(&["mona", "login"]);
         assert!(should_auto_install_update(&args));
     }
 
     #[test]
     fn auto_install_allowed_with_live_terminal_attached() {
-        let args = parse_args(&["jcode", "login"]);
+        let args = parse_args(&["mona", "login"]);
         assert!(should_auto_install_update(&args));
     }
 
     #[test]
     fn auto_install_respects_explicit_disable_even_without_terminal() {
-        let mut args = parse_args(&["jcode", "login"]);
+        let mut args = parse_args(&["mona", "login"]);
         args.auto_update = false;
         assert!(!should_auto_install_update(&args));
     }
@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn update_command_still_skips_background_check_before_auto_install_logic() {
-        let args = parse_args(&["jcode", "update"]);
+        let args = parse_args(&["mona", "update"]);
         assert!(matches!(args.command, Some(Command::Update)));
         assert!(!should_spawn_background_update_check(&args));
         assert!(should_auto_install_update(&args));
@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     fn config_can_permanently_disable_background_update_checks() {
-        let args = parse_args(&["jcode", "login"]);
+        let args = parse_args(&["mona", "login"]);
         assert!(should_spawn_background_update_check_with_config(
             &args, true
         ));
@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn hidden_spawn_hotkey_argument_is_global_and_preserves_canonical_text() {
-        let args = parse_args(&["jcode", "--spawn-hotkey", "shift+cmd+'", "self-dev"]);
+        let args = parse_args(&["mona", "--spawn-hotkey", "shift+cmd+'", "self-dev"]);
         assert_eq!(args.spawn_hotkey.as_deref(), Some("shift+cmd+'"));
         assert!(matches!(args.command, Some(Command::SelfDev { .. })));
     }

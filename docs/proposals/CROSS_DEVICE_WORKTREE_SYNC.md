@@ -25,10 +25,10 @@ single machine.
 
 | Building block | Where | Why it matters |
 | --- | --- | --- |
-| Arch-independent version identity | `jcode-build-support/src/source_state.rs` (`SourceState::version_label`, `fingerprint`) | Fingerprint hashes full commit hash + status + `diff --binary HEAD` + untracked contents. Identical source trees on two machines produce the same label, even though binaries differ per-arch. |
+| Arch-independent version identity | `mona-build-support/src/source_state.rs` (`SourceState::version_label`, `fingerprint`) | Fingerprint hashes full commit hash + status + `diff --binary HEAD` + untracked contents. Identical source trees on two machines produce the same label, even though binaries differ per-arch. |
 | Auto-reload on newer binary | `server/util.rs::server_has_newer_binary`, `reload_exec_target` | Mtime-based channel scan. A peer-triggered local build that publishes to `builds/current` triggers the existing reload flow with zero changes. |
 | Pull → build → install → exec | `session_rebuild.rs` | Already implements the receiving side's pipeline shape. |
-| Network door, same protocol | `jcode-base/src/gateway.rs` (WS + plain HTTP on :7643) | Remote clients speak the identical newline-JSON protocol as Unix-socket clients. Plain HTTP handler (`/pair`, `/health`) is a natural place for `/peer/*` endpoints. |
+| Network door, same protocol | `mona-base/src/gateway.rs` (WS + plain HTTP on :7643) | Remote clients speak the identical newline-JSON protocol as Unix-socket clients. Plain HTTP handler (`/pair`, `/health`) is a natural place for `/peer/*` endpoints. |
 | NAT-friendly device event bus | `server/jade_relay.rs` | Device IDs, heartbeats, long-polled command events. Works when machines cannot reach each other directly. |
 | Server-side tool execution | server architecture | Tools (bash, edit) run in the server process; a remote client attaching to another machine's server gets the full multi-agent-one-worktree behavior, including conflict warnings. |
 | Remote build precedent | `scripts/remote_build.sh` | rsync + ssh + sync-back pattern. |
@@ -39,7 +39,7 @@ single machine.
 git common dir / worktree. These will never match across machines
 (`/Users/jeremy/...` vs `/home/jeremy/...`). Cross-device features must key
 repos by something portable: normalized origin URL, or an explicit repo name
-in config (`[sync] repo_id = "jcode"`), falling back to origin URL hash.
+in config (`[sync] repo_id = "mona"`), falling back to origin URL hash.
 
 ## Design tensions
 
@@ -111,7 +111,7 @@ Config sketch:
 ```toml
 [sync]
 enabled = true
-repo_id = "jcode"                  # portable repo identity
+repo_id = "mona"                  # portable repo identity
 peers = ["macbook.tail-net.ts.net:7643"]
 auto_apply = "clean-ff-only"       # off | clean-ff-only | always-notify
 ```
@@ -128,7 +128,7 @@ Work items:
   server-side; needs a client-side counterpart).
 - Pairing/auth UX for a trusted personal device (DeviceRegistry exists).
 - Audit client-side local-disk reads that assume the session's filesystem,
-  e.g. `jcode-tui/src/tui/ui_file_diff.rs:270` (`std::fs::read_to_string` of
+  e.g. `mona-tui/src/tui/ui_file_diff.rs:270` (`std::fs::read_to_string` of
   the diffed file). These need server RPCs (a `read_file` control request) or
   graceful degradation.
 

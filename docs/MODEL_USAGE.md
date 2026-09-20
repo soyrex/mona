@@ -34,7 +34,7 @@ The TypeScript SDK exposes the equivalent optional `usage` field.
 - Missing `usage` means unknown metadata, including older servers. It must not
   be displayed as "never used".
 
-The ledger is stored under `JCODE_HOME` (normally `~/.jcode`) as
+The ledger is stored under `MONA_HOME` (normally `~/.jcode`) as
 `model-usage-v1.sqlite3`. SQLite serializes concurrent writers. Its primary key
 combines durable session/input-turn ID and route identity, so repeated tool continuations do
 not increase the count. Reads do not create or modify the ledger. Runtime
@@ -50,7 +50,7 @@ historical request attribution. No transcript scan is performed on picker open.
 
 ## Ranking and freshness
 
-`jcode_sdk::compare_model_usage` and TypeScript `compareModelUsage` compare usage
+`mona_sdk::compare_model_usage` and TypeScript `compareModelUsage` compare usage
 best-first by tracked turn count, last-used time, historical selection count,
 and last-selected time. Search relevance and explicit current/favorite policy
 belong ahead of this comparator, followed by a stable model/route tie-breaker.

@@ -37,10 +37,10 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # ── socket helpers ─────────────────────────────────────────────────────────────
 
-def jcode_debug_socket():
+def mona_debug_socket():
     """Find the active jcode debug socket path."""
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return os.path.join(runtime_dir, "jcode-debug.sock")
+    return os.path.join(runtime_dir, "mona-debug.sock")
 
 
 def _send_recv(sock_path, request, timeout=TIMEOUT_SECS):
@@ -68,7 +68,7 @@ def dbg(command, session_id=None, timeout=TIMEOUT_SECS):
     req = {"type": "debug_command", "id": 1, "command": command}
     if session_id:
         req["session_id"] = session_id
-    return _send_recv(jcode_debug_socket(), req, timeout=timeout)
+    return _send_recv(mona_debug_socket(), req, timeout=timeout)
 
 
 def get_sessions():
@@ -212,8 +212,8 @@ def test_selfdev_socket_info():
 
 @test("6. Reload context file: write and load roundtrip")
 def test_reload_context_roundtrip():
-    jcode_dir = pathlib.Path.home() / ".jcode"
-    ctx_path = jcode_dir / "reload-context.json"
+    mona_dir = pathlib.Path.home() / ".jcode"
+    ctx_path = mona_dir / "reload-context.json"
 
     original = ctx_path.read_text() if ctx_path.exists() else None
     test_ctx = {
@@ -241,8 +241,8 @@ def test_reload_context_roundtrip():
 
 @test("7. Reload context: session_id filtering (peek_for_session)")
 def test_reload_context_session_filter():
-    jcode_dir = pathlib.Path.home() / ".jcode"
-    ctx_path = jcode_dir / "reload-context.json"
+    mona_dir = pathlib.Path.home() / ".jcode"
+    ctx_path = mona_dir / "reload-context.json"
 
     original = ctx_path.read_text() if ctx_path.exists() else None
     test_ctx = {
@@ -270,8 +270,8 @@ def test_reload_context_session_filter():
 
 @test("8. Reload-info file: write and verify format")
 def test_reload_info_file():
-    jcode_dir = pathlib.Path.home() / ".jcode"
-    info_path = jcode_dir / "reload-info"
+    mona_dir = pathlib.Path.home() / ".jcode"
+    info_path = mona_dir / "reload-info"
 
     original = info_path.read_text() if info_path.exists() else None
     try:
@@ -307,7 +307,7 @@ def test_canary_binary_path():
         print(f"     canary_status: {manifest.get('canary_status')}")
 
     if canary_hash:
-        canary_binary = home / ".jcode" / "builds" / "canary" / "jcode"
+        canary_binary = home / ".jcode" / "builds" / "canary" / "mona"
         exists = canary_binary.exists()
         if verbose:
             print(f"     canary binary at {canary_binary}: exists={exists}")
@@ -389,7 +389,7 @@ def test_multiple_sessions_responsive():
     sessions = []
     try:
         for i in range(N):
-            s = create_session(f"/tmp/jcode-test-{i}")
+            s = create_session(f"/tmp/mona-test-{i}")
             sessions.append(s)
 
         assert len(sessions) == N, f"Only created {len(sessions)}/{N} sessions"
@@ -435,8 +435,8 @@ def test_stale_reload_info():
     A stale reload-info file (from a crashed reload) would show a false
     'reload succeeded' message on next connect. Check for this condition.
     """
-    jcode_dir = pathlib.Path.home() / ".jcode"
-    info_path = jcode_dir / "reload-info"
+    mona_dir = pathlib.Path.home() / ".jcode"
+    info_path = mona_dir / "reload-info"
 
     if not info_path.exists():
         if verbose:
@@ -524,7 +524,7 @@ def test_reload_signal_chain_integrity():
 # ── pre-flight ─────────────────────────────────────────────────────────────────
 
 def check_server_up():
-    dbg_sock = jcode_debug_socket()
+    dbg_sock = mona_debug_socket()
     if not os.path.exists(dbg_sock):
         raise RuntimeError(
             f"Debug socket not found at {dbg_sock}.\n"

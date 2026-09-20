@@ -5,36 +5,36 @@ files, so you can tune agent behavior without rebuilding.
 
 ## Layers (in order)
 
-1. **Base system prompt** — built-in `crates/jcode-base/src/prompt/system_prompt.md`,
+1. **Base system prompt** — built-in `crates/mona-base/src/prompt/system_prompt.md`,
    overridable by file (see below).
 2. Capability modules (e.g. Mermaid guidance).
 3. Product-specific self-dev guidance. Sessions rooted in a Jcode Desktop
    checkout automatically receive the Desktop prompt and `desktop_selfdev` tool,
    separate from CLI/TUI self-dev flags, `selfdev`, and `debug_socket`.
 4. `AGENTS.md` — project `./AGENTS.md` and global `~/AGENTS.md`.
-5. Prompt overlay — `./.jcode/prompt-overlay.md` and `~/.jcode/prompt-overlay.md`.
-6. Preferred tools — `./.jcode/preferred-tools.md` and `~/.jcode/preferred-tools.md`.
+5. Prompt overlay — `./.mona/prompt-overlay.md` and `~/.mona/prompt-overlay.md`.
+6. Preferred tools — `./.mona/preferred-tools.md` and `~/.mona/preferred-tools.md`.
 7. Memory and the active skill prompt (dynamic, not cached).
 
 ## Adding guidance (most common)
 
 Append instructions without touching the default prompt:
 
-- `~/.jcode/prompt-overlay.md` — applies everywhere.
-- `./.jcode/prompt-overlay.md` — applies to one project.
+- `~/.mona/prompt-overlay.md` — applies everywhere.
+- `./.mona/prompt-overlay.md` — applies to one project.
 
 Both are included when present. For layers 4–6, if the project and global paths
 resolve to the same canonical path (for example, when working in `$HOME` or using
 symlink aliases), the file is included once under its project heading. Distinct
 files are still both included, even when their contents match. The global
-`.jcode` directory respects `JCODE_HOME` when set.
+`.jcode` directory respects `MONA_HOME` when set.
 
 ## Replacing the base prompt
 
 To fully replace layer 1, create either file:
 
-- `./.jcode/system-prompt.md` (project, highest precedence)
-- `~/.jcode/system-prompt.md` (global)
+- `./.mona/system-prompt.md` (project, highest precedence)
+- `~/.mona/system-prompt.md` (global)
 
 The first non-empty file wins; otherwise the built-in default is used. An empty or
 whitespace-only file falls back to the default, so you cannot accidentally ship an

@@ -1,0 +1,12 @@
+[package]
+name = "mona-provider-anthropic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mona-schema-dialect = { path = "../mona-schema-dialect" }
+mona-logging = { path = "../mona-logging" }
+mona-message-types = { path = "../mona-message-types" }
+mona-provider-core = { path = "../mona-provider-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

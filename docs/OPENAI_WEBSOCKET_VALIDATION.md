@@ -4,11 +4,11 @@
 
 On 2026-09-06 UTC, 20 first-message requests were run through real, isolated
 Jcode daemons using the activated `a495fb059-dirty-40e6123ec268` binary.
-Ten used `JCODE_OPENAI_PREWARM=0`, and ten used `JCODE_OPENAI_PREWARM=1`.
+Ten used `MONA_OPENAI_PREWARM=0`, and ten used `MONA_OPENAI_PREWARM=1`.
 Both conditions used WebSocket v2. This isolates the benefit of **prewarming**,
 not a v1-versus-v2 protocol comparison.
 
-Each trial started a new daemon with a unique socket and `JCODE_RUNTIME_DIR`,
+Each trial started a new daemon with a unique socket and `MONA_RUNTIME_DIR`,
 provider `openai-api`, model `gpt-5.6-sol`, and tool profile `none`. After the
 subscription acknowledgment, both conditions received exactly 1.5 seconds of
 simulated user think time. The warmed condition did not wait conditionally for
@@ -101,7 +101,7 @@ exercise. A complete mapping does not imply complete live-provider coverage.
 | Bound warmup and expire unused state | `expired_ready_warmup_is_closed_instead_of_adopted`; source check S1 | Passed expiry-rejection/socket-close test. Source assertions confirmed 5-second timeout and 30-second cleanup timer. Automatic wall-clock cleanup at exactly 30 seconds was not separately timed. |
 | Reject failed or malformed preparation without poisoning normal generation | `rejected_warmup_is_not_adopted`; `warm_socket` and failure-branch review | Passed failed-status rejection test. Source checks reject unexpected events/output or mismatched IDs and keep warmup failure outside foreground errors/cooldown updates. Malformed-event variants were reviewed, not all injected live. |
 | Preserve normal WebSocket recovery and HTTPS fallback | `test_record_websocket_fallback_sets_cooldown_for_auto_default_models`; `test_record_websocket_fallback_tracks_streak_and_cooldown`; cancellation/reuse regressions | Passed existing recovery-policy tests. The live latency experiment observed no fallback and therefore does not independently prove a forced live HTTPS failover. |
-| Public `JCODE_OPENAI_PREWARM` control | Ten live disabled controls versus ten enabled trials; source check S2 | `0` produced 0/10 first-request reuses; `1` produced 10/10. Source assertion confirmed trimmed, case-insensitive `false` and `off` aliases. Alias spellings were not separately exercised live. |
+| Public `MONA_OPENAI_PREWARM` control | Ten live disabled controls versus ten enabled trials; source check S2 | `0` produced 0/10 first-request reuses; `1` produced 10/10. Source assertion confirmed trimmed, case-insensitive `false` and `off` aliases. Alias spellings were not separately exercised live. |
 | HTTPS and browser-backed providers skip preparation | Source check S3; HTTPS state-reset test | Passed early-return source assertions and reset regression. No additional live browser-provider test was performed. |
 | Public protocol diagnostic | Source check S7; runtime diagnostic-log scan | `websocket_protocol=v2` confirmed in formatter and observed in runtime logs. |
 | Public lifecycle diagnostics | Source check S8; runtime log scan restricted to structured lifecycle lines | All four observed: `ws_prewarm_ready`, `ws_prewarm_hit`, `ws_prewarm_miss`, `ws_prewarm_unavailable`. Scan found 21, 11, 2, and 2 occurrences respectively at verification time. |

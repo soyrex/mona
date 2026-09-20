@@ -1,0 +1,146 @@
+[package]
+name = "mona-app-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Application core for jcode: all non-presentation modules (server, agent,
+# provider, auth, session, tool, config, etc.) extracted out of the monolithic
+# root `jcode` crate so they compile as a separate rustc unit. The root `jcode`
+# crate (cli + tui + bin) re-exports this crate's modules via `pub use
+# mona_app_core::*`, preserving every existing `crate::<module>` path.
+
+[lib]
+name = "mona_app_core"
+path = "src/lib.rs"
+
+[dependencies]
+# NOTE: the jemalloc allocator stats live in `mona-base` (process_memory) and
+# local embeddings live in `mona-base` (embedding); this crate forwards those
+# features to mona-base rather than depending on the backing crates directly.
+
+# Async runtime
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "blocking", "charset", "http2", "system-proxy", "rustls-tls", "rustls-tls-native-roots"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+
+# CLI
+
+# File operations
+glob = "0.3"
+similar = "2"            # diffing for edits
+
+# Utilities
+dirs = "5"               # home directory
+anyhow = "1"
+libc = "0.2"             # Unix system calls (flock)
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+urlencoding = "2"        # URL encoding for web search
+uuid = { version = "1", features = ["v4", "v5"] }
+
+# Embeddings (local inference) live in mona-base; this crate forwards the
+# `embeddings` feature to mona-base rather than depending on mona-embedding.
+mona-harness-api = { path = "../mona-harness-api" }
+mona-import-core = { path = "../mona-import-core" }
+
+# OAuth
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.9.3"
+url = "2"
+open = "5"               # Open URLs in browser
+mona-agent-runtime = { path = "../mona-agent-runtime" }
+mona-ambient-types = { path = "../mona-ambient-types" }
+mona-notify-email = { path = "../mona-notify-email" }
+mona-provider-core = { path = "../mona-provider-core" }
+mona-schema-dialect = { path = "../mona-schema-dialect" }
+# NOTE: mona-app-core does NOT depend on any mona-tui-* crate. They were
+# unused dead dependency edges here (the TUI declares them itself). Removing
+# them stops a mona-tui-* edit from cascading a recompile through app-core.
+mona-update-core = { path = "../mona-update-core" }
+mona-terminal-image = { path = "../mona-terminal-image" }
+
+# Streaming
+tokio-stream = "0.1"
+
+# TUI
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+
+# Markdown & syntax highlighting
+unicode-width = "0.2"   # Unicode character display width
+
+# PDF parsing (behind feature flag)
+mona-pdf = { path = "../mona-pdf", optional = true }
+mona-build-support = { path = "../mona-build-support" }
+mona-build-meta = { path = "../mona-build-meta" }
+
+# Foundational layer (provider, auth, config, session, message, memory, ...).
+# Re-exported via `pub use mona_base::*` in lib.rs. default-features=false so
+# this crate controls mona-base's optional features (see [features] below).
+mona-base = { path = "../mona-base", default-features = false }
+mona-command-risk = { path = "../mona-command-risk" }
+mona-core = { path = "../mona-core" }
+mona-message-types = { path = "../mona-message-types" }
+mona-overnight-core = { path = "../mona-overnight-core" }
+mona-plan = { path = "../mona-plan" }
+mona-swarm-core = { path = "../mona-swarm-core" }
+mona-selfdev-types = { path = "../mona-selfdev-types" }
+mona-session-types = { path = "../mona-session-types" }
+mona-setup-hints = { path = "../mona-setup-hints" }
+mona-task-types = { path = "../mona-task-types" }
+mona-tool-core = { path = "../mona-tool-core" }
+mona-tool-types = { path = "../mona-tool-types" }
+
+# Archive extraction (for auto-update)
+flate2 = "1"
+tar = "0.4"
+tempfile = "3"
+agentgrep = { git = "https://github.com/1jehuang/agentgrep.git", tag = "v0.1.6" }
+
+[features]
+default = ["pdf", "bedrock"]
+# jemalloc allocator stats live in mona-base (process_memory); forward there.
+jemalloc = ["mona-base/jemalloc"]
+jemalloc-prof = ["mona-base/jemalloc-prof"]
+# local embeddings live in mona-base (embedding); forward there.
+embeddings = ["mona-base/embeddings"]
+# live AWS Bedrock support lives in mona-base (provider/bedrock); forward there.
+bedrock = ["mona-base/bedrock"]
+# Used only by the CentOS 7 portable Linux release build.
+linux-compat-vendored-openssl = ["mona-notify-email/linux-compat-vendored-openssl"]
+# PDF text extraction lives in this crate (tool/read.rs).
+pdf = ["dep:mona-pdf"]
+# Compiles this crate's test-only helpers/accessors (e.g. the
+# ExternalAuthReviewCandidate read accessors) as `pub` and forwards
+# mona-base's `test-support` so downstream crates' test targets can reach the
+# whole stack's helpers. Never enabled in normal (non-test) builds.
+test-support = ["mona-base/test-support"]
+
+[dev-dependencies]
+# Used by async streaming tests (ambient/runner_tests, server/client_actions_tests).
+async-stream = "0.3"
+# Enables mona-base's test-support helpers (storage::lock_test_env,
+# auth::test_sandbox, bus::reset_models_updated_publish_state_for_tests) for
+# *this* crate's own test target. Feature unification applies this only to
+# test/bench/example builds, not to a normal `cargo build`.
+mona-base = { path = "../mona-base", default-features = false, features = ["test-support"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.7"
+# Native desktop control for the `macos_computer_use` tool (synthetic mouse/keyboard
+# events, cursor positioning, display bounds). `highsierra` enables the
+# CGEventCreateScrollWheelEvent2 binding used for scroll.
+core-graphics = { version = "0.23", features = ["highsierra"] }

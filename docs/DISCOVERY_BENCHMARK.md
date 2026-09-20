@@ -102,13 +102,13 @@ cannot be hidden by a later clean attempt.
 The runner uses a dedicated Jcode server with:
 
 ```text
-JCODE_DISCOVERY_BENCHMARK=1
+MONA_DISCOVERY_BENCHMARK=1
 ```
 
 Every Discovery request from that server carries:
 
 ```text
-x-jcode-discovery-benchmark: 1
+x-mona-discovery-benchmark: 1
 ```
 
 Discovery telemetry carries:

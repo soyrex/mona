@@ -6,7 +6,7 @@ Add a single native tool, **`computer`**, that lets the agent observe and contro
 the macOS GUI — screenshots, the accessibility (AX) tree, mouse/keyboard input,
 window/app management, and clipboard — through one `action`-dispatched interface.
 
-This mirrors the existing **`browser`** tool (`crates/jcode-app-core/src/tool/browser.rs`):
+This mirrors the existing **`browser`** tool (`crates/mona-app-core/src/tool/browser.rs`):
 one registered tool, an `action: String` that selects a sub-operation, with optional
 typed params. It gives jcode a closed control loop (*see screen → decide → act*)
 without depending on a browser or external automation tooling.
@@ -24,14 +24,14 @@ without depending on a browser or external automation tooling.
 ## Architecture
 
 ```
-crates/jcode-macos-control/        (new) cfg(target_os = "macos") platform crate
+crates/mona-macos-control/        (new) cfg(target_os = "macos") platform crate
   └─ AX (accessibility-sys), CGEvent (core-graphics),
      CoreFoundation (core-foundation), screenshots (ScreenCaptureKit / CGDisplay),
      app/window control (objc2 + objc2-app-kit), clipboard (objc2 NSPasteboard)
 
-crates/jcode-app-core/src/tool/computer.rs   (new) ComputerTool
-  └─ thin dispatch layer: parse input -> call jcode-macos-control -> ToolOutput
-  └─ registered in crates/jcode-app-core/src/tool/mod.rs base_tools()
+crates/mona-app-core/src/tool/computer.rs   (new) ComputerTool
+  └─ thin dispatch layer: parse input -> call mona-macos-control -> ToolOutput
+  └─ registered in crates/mona-app-core/src/tool/mod.rs base_tools()
 ```
 
 - All native APIs are reached through existing Rust bindings (`objc2`,
@@ -133,7 +133,7 @@ Computer use is high-blast-radius, so:
 
 ## Implementation plan
 
-1. `jcode-macos-control` crate: permissions, screenshot, AX read, AX action,
+1. `mona-macos-control` crate: permissions, screenshot, AX read, AX action,
    CGEvent input, window/app control, clipboard. Unit-test the pure parts
    (input parsing, chord parsing, tree serialization).
 2. `ComputerTool` in `tool/computer.rs`: input struct + `action` dispatch +

@@ -147,7 +147,7 @@ impl ProviderChoice {
     #[allow(deprecated)]
     pub fn as_arg_value(&self) -> &'static str {
         match self {
-            Self::Jcode => "jcode",
+            Self::Jcode => "mona",
             Self::Claude => "claude",
             Self::AnthropicApi => "anthropic-api",
             Self::ClaudeSubprocess => "claude-subprocess",
@@ -209,7 +209,7 @@ impl ProviderChoice {
 const PROVIDER_CHOICE_LOGIN_PROVIDERS: &[(ProviderChoice, LoginProviderDescriptor)] = &[
     (
         ProviderChoice::Jcode,
-        crate::provider_catalog::JCODE_LOGIN_PROVIDER,
+        crate::provider_catalog::MONA_LOGIN_PROVIDER,
     ),
     (
         ProviderChoice::Claude,
@@ -666,10 +666,10 @@ async fn detect_auto_provider_flags() -> AutoProviderAvailability {
     // An exec-based daemon reload inherits this one-shot, non-secret snapshot
     // from its predecessor. Consuming it avoids repeating credential discovery
     // on the reload critical path while ensuring later processes cannot reuse it.
-    let auth_status = std::env::var("JCODE_RELOAD_AUTH_STATUS")
+    let auth_status = std::env::var("MONA_RELOAD_AUTH_STATUS")
         .ok()
         .and_then(|snapshot| {
-            crate::env::remove_var("JCODE_RELOAD_AUTH_STATUS");
+            crate::env::remove_var("MONA_RELOAD_AUTH_STATUS");
             serde_json::from_str::<auth::AuthStatus>(&snapshot).ok()
         })
         .unwrap_or_else(auth::AuthStatus::check_fast);
@@ -1252,10 +1252,10 @@ fn disable_subscription_runtime_mode() {
 }
 
 fn disable_subscription_runtime_mode_preserving_active_provider_profile() {
-    if std::env::var_os("JCODE_PROVIDER_PROFILE_ACTIVE").is_some()
-        || std::env::var_os("JCODE_NAMED_PROVIDER_PROFILE").is_some()
+    if std::env::var_os("MONA_PROVIDER_PROFILE_ACTIVE").is_some()
+        || std::env::var_os("MONA_NAMED_PROVIDER_PROFILE").is_some()
     {
-        crate::env::remove_var(crate::subscription_catalog::JCODE_SUBSCRIPTION_ACTIVE_ENV);
+        crate::env::remove_var(crate::subscription_catalog::MONA_SUBSCRIPTION_ACTIVE_ENV);
     } else {
         disable_subscription_runtime_mode();
     }
@@ -1264,7 +1264,7 @@ fn disable_subscription_runtime_mode_preserving_active_provider_profile() {
 pub fn apply_login_provider_profile_env(provider: LoginProviderDescriptor) {
     // #712: the arms below clear an explicitly selected named profile, which
     // made auth-test probe (and false-negative) the generic compatible slot.
-    if std::env::var_os("JCODE_NAMED_PROVIDER_PROFILE").is_some() {
+    if std::env::var_os("MONA_NAMED_PROVIDER_PROFILE").is_some() {
         return;
     }
     match provider.target {
@@ -1273,7 +1273,7 @@ pub fn apply_login_provider_profile_env(provider: LoginProviderDescriptor) {
             // Bootstrap login still spawns the daemon with `--provider auto`. Mark the
             // just-selected compatible provider as active so the child process does
             // not clear these inherited runtime vars before credential detection.
-            crate::env::set_var("JCODE_PROVIDER_PROFILE_ACTIVE", "1");
+            crate::env::set_var("MONA_PROVIDER_PROFILE_ACTIVE", "1");
         }
         LoginProviderTarget::AutoImport | LoginProviderTarget::Google => {}
         _ => {
@@ -1360,8 +1360,8 @@ pub async fn login_and_bootstrap_provider(
         LoginProviderTarget::Cursor => {
             disable_subscription_runtime_mode();
             clear_initial_model_provider();
-            crate::env::set_var("JCODE_ACTIVE_PROVIDER", "cursor");
-            Arc::new(jcode_provider_cursor_runtime::CursorCliProvider::new())
+            crate::env::set_var("MONA_ACTIVE_PROVIDER", "cursor");
+            Arc::new(mona_provider_cursor_runtime::CursorCliProvider::new())
         }
         LoginProviderTarget::Copilot => {
             disable_subscription_runtime_mode();
@@ -1370,14 +1370,14 @@ pub async fn login_and_bootstrap_provider(
         LoginProviderTarget::Gemini => {
             disable_subscription_runtime_mode();
             clear_initial_model_provider();
-            crate::env::set_var("JCODE_ACTIVE_PROVIDER", "gemini");
-            Arc::new(jcode_provider_gemini_runtime::GeminiProvider::new())
+            crate::env::set_var("MONA_ACTIVE_PROVIDER", "gemini");
+            Arc::new(mona_provider_gemini_runtime::GeminiProvider::new())
         }
         LoginProviderTarget::Antigravity => {
             disable_subscription_runtime_mode();
             clear_initial_model_provider();
-            crate::env::set_var("JCODE_ACTIVE_PROVIDER", "antigravity");
-            Arc::new(jcode_provider_antigravity_runtime::AntigravityProvider::new())
+            crate::env::set_var("MONA_ACTIVE_PROVIDER", "antigravity");
+            Arc::new(mona_provider_antigravity_runtime::AntigravityProvider::new())
         }
         LoginProviderTarget::Google => {
             anyhow::bail!("Google login cannot be used as a model provider bootstrap");
@@ -1440,15 +1440,15 @@ async fn init_provider_with_options(
     // OpenRouter/OpenAI-compatible factory) and their model-picker routes.
     super::startup::register_external_provider_runtimes();
 
-    if let Ok(profile_name) = std::env::var("JCODE_PROVIDER_PROFILE_NAME")
+    if let Ok(profile_name) = std::env::var("MONA_PROVIDER_PROFILE_NAME")
         && !profile_name.trim().is_empty()
     {
         crate::provider_catalog::apply_named_provider_profile_env(profile_name.trim())?;
-        crate::env::set_var("JCODE_PROVIDER_PROFILE_ACTIVE", "1");
+        crate::env::set_var("MONA_PROVIDER_PROFILE_ACTIVE", "1");
     }
 
-    if std::env::var_os("JCODE_PROVIDER_PROFILE_ACTIVE").is_none()
-        && std::env::var_os("JCODE_NAMED_PROVIDER_PROFILE").is_none()
+    if std::env::var_os("MONA_PROVIDER_PROFILE_ACTIVE").is_none()
+        && std::env::var_os("MONA_NAMED_PROVIDER_PROFILE").is_none()
     {
         if let Some(profile) = profile_for_choice(choice) {
             apply_openai_compatible_profile_env(Some(profile));
@@ -1488,7 +1488,7 @@ async fn init_provider_with_options(
             crate::logging::warn(
                 "Using --provider claude-subprocess is deprecated and will be removed. Prefer `--provider claude`.",
             );
-            crate::env::set_var("JCODE_USE_CLAUDE_CLI", "1");
+            crate::env::set_var("MONA_USE_CLAUDE_CLI", "1");
             init_notice(
                 "Using deprecated Claude subprocess transport as the initial provider (legacy compatibility mode)",
             );
@@ -1514,8 +1514,8 @@ async fn init_provider_with_options(
             ensure_cursor_auth_allowed_for_explicit_choice()?;
             init_notice("Using Cursor native HTTPS provider (experimental)");
             clear_initial_model_provider();
-            crate::env::set_var("JCODE_ACTIVE_PROVIDER", "cursor");
-            Arc::new(jcode_provider_cursor_runtime::CursorCliProvider::new())
+            crate::env::set_var("MONA_ACTIVE_PROVIDER", "cursor");
+            Arc::new(mona_provider_cursor_runtime::CursorCliProvider::new())
         }
         ProviderChoice::Copilot => {
             disable_subscription_runtime_mode();
@@ -1535,14 +1535,14 @@ async fn init_provider_with_options(
                 init_notice("Using Gemini provider (native Google Code Assist OAuth)");
             }
             clear_initial_model_provider();
-            crate::env::set_var("JCODE_ACTIVE_PROVIDER", "gemini");
-            Arc::new(jcode_provider_gemini_runtime::GeminiProvider::new())
+            crate::env::set_var("MONA_ACTIVE_PROVIDER", "gemini");
+            Arc::new(mona_provider_gemini_runtime::GeminiProvider::new())
         }
         ProviderChoice::GrokBuild => {
             disable_subscription_runtime_mode();
             init_notice("Using Grok Build subscription via the authenticated Grok CLI");
             clear_initial_model_provider();
-            crate::env::set_var("JCODE_ACTIVE_PROVIDER", "grok-build");
+            crate::env::set_var("MONA_ACTIVE_PROVIDER", "grok-build");
             crate::provider::external::instantiate_external_provider(
                 crate::provider::external::GROK_BUILD_RUNTIME,
             )
@@ -1612,7 +1612,7 @@ async fn init_provider_with_options(
             disable_subscription_runtime_mode();
             let profile = profile_for_choice(choice)
                 .ok_or_else(|| anyhow::anyhow!("missing provider profile for choice"))?;
-            if std::env::var_os("JCODE_NAMED_PROVIDER_PROFILE").is_none() {
+            if std::env::var_os("MONA_NAMED_PROVIDER_PROFILE").is_none() {
                 // An explicit `--provider <compatible>` selection should win over
                 // any stale active-profile marker inherited from a previous
                 // bootstrap/login flow. Named provider profiles still take
@@ -1620,7 +1620,7 @@ async fn init_provider_with_options(
                 force_apply_openai_compatible_profile_env(Some(profile));
             }
             let mut runtime_model_hint = None;
-            let display_name = if let Ok(named) = std::env::var("JCODE_NAMED_PROVIDER_PROFILE") {
+            let display_name = if let Ok(named) = std::env::var("MONA_NAMED_PROVIDER_PROFILE") {
                 if let Some(profile) = crate::config::config().providers.get(&named) {
                     runtime_model_hint = profile.default_model.clone();
                 }
@@ -1640,20 +1640,20 @@ async fn init_provider_with_options(
                 display_name
             ));
             crate::provider::activation::apply_openai_compatible_runtime(runtime_model_hint)?;
-            if std::env::var_os("JCODE_NAMED_PROVIDER_PROFILE").is_some() {
-                let profile_name = std::env::var("JCODE_NAMED_PROVIDER_PROFILE")?;
+            if std::env::var_os("MONA_NAMED_PROVIDER_PROFILE").is_some() {
+                let profile_name = std::env::var("MONA_NAMED_PROVIDER_PROFILE")?;
                 let cfg = crate::config::config();
                 let profile = cfg.providers.get(&profile_name).ok_or_else(|| {
                     anyhow::anyhow!("Unknown provider profile '{}'", profile_name)
                 })?;
                 Arc::new(
-                    jcode_provider_openrouter_runtime::OpenRouterProvider::new_named_openai_compatible(
+                    mona_provider_openrouter_runtime::OpenRouterProvider::new_named_openai_compatible(
                         &profile_name,
                         profile,
                     )?,
                 )
             } else {
-                Arc::new(jcode_provider_openrouter_runtime::OpenRouterProvider::new()?)
+                Arc::new(mona_provider_openrouter_runtime::OpenRouterProvider::new()?)
             }
         }
         ProviderChoice::Antigravity => {
@@ -1661,8 +1661,8 @@ async fn init_provider_with_options(
             ensure_antigravity_auth_allowed_for_explicit_choice()?;
             init_notice("Using Antigravity provider (experimental)");
             clear_initial_model_provider();
-            crate::env::set_var("JCODE_ACTIVE_PROVIDER", "antigravity");
-            Arc::new(jcode_provider_antigravity_runtime::AntigravityProvider::new())
+            crate::env::set_var("MONA_ACTIVE_PROVIDER", "antigravity");
+            Arc::new(mona_provider_antigravity_runtime::AntigravityProvider::new())
         }
         ProviderChoice::Google => {
             disable_subscription_runtime_mode();
@@ -1809,25 +1809,25 @@ async fn init_provider_with_options(
                     "Using {} (use /model to switch models)",
                     multi.name()
                 ));
-                crate::env::set_var("JCODE_ACTIVE_PROVIDER", multi.name().to_lowercase());
+                crate::env::set_var("MONA_ACTIVE_PROVIDER", multi.name().to_lowercase());
                 Arc::new(multi)
             } else {
-                let non_interactive = std::env::var("JCODE_NON_INTERACTIVE").is_ok();
+                let non_interactive = std::env::var("MONA_NON_INTERACTIVE").is_ok();
                 // Deferred-auth bootstrap: the interactive TUI server is spawned
-                // headless (JCODE_NON_INTERACTIVE) but the user logs in *inside*
+                // headless (MONA_NON_INTERACTIVE) but the user logs in *inside*
                 // the TUI on a fresh install. Rather than bail, boot an empty
                 // MultiProvider with no configured credentials yet. The TUI's
                 // `/login` flow then activates a provider via the normal
                 // auth-changed path (MultiProvider::on_auth_changed hot-inits the
                 // newly logged-in provider). Only the actual TUI server opts in
-                // via JCODE_DEFERRED_AUTH_BOOTSTRAP, so `jcode run` and other
+                // via MONA_DEFERRED_AUTH_BOOTSTRAP, so `jcode run` and other
                 // genuinely headless callers still fail loudly.
-                if std::env::var_os("JCODE_DEFERRED_AUTH_BOOTSTRAP").is_some() {
+                if std::env::var_os("MONA_DEFERRED_AUTH_BOOTSTRAP").is_some() {
                     crate::logging::info(
                         "No credentials configured; booting deferred-auth MultiProvider for in-TUI onboarding login",
                     );
                     let multi = provider::MultiProvider::from_auth_status(availability.auth_status);
-                    crate::env::set_var("JCODE_ACTIVE_PROVIDER", multi.name().to_lowercase());
+                    crate::env::set_var("MONA_ACTIVE_PROVIDER", multi.name().to_lowercase());
                     Arc::new(multi)
                 } else if non_interactive {
                     anyhow::bail!(
@@ -1857,8 +1857,8 @@ async fn init_provider_with_options(
         })?;
     }
 
-    if std::env::var_os("JCODE_PROVIDER_PROFILE_ACTIVE").is_none()
-        && std::env::var_os("JCODE_NAMED_PROVIDER_PROFILE").is_none()
+    if std::env::var_os("MONA_PROVIDER_PROFILE_ACTIVE").is_none()
+        && std::env::var_os("MONA_NAMED_PROVIDER_PROFILE").is_none()
         && model.is_none()
         && let Some(profile) = profile_for_choice(choice)
         && let Some(default_model) = resolved_profile_default_model(profile)

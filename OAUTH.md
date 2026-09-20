@@ -12,13 +12,13 @@ for future sessions and still leaves the original file untouched (no move,
 rewrite, or permission mutation). Symlinked external auth files are rejected.
 
 Credentials are stored locally:
-- J-Code Claude OAuth (if logged in via `jcode login --provider claude`): `~/.jcode/auth.json`
+- J-Code Claude OAuth (if logged in via `jcode login --provider claude`): `~/.mona/auth.json`
 - Claude Code CLI: `~/.claude/.credentials.json` (Linux/Windows), or the **macOS login Keychain** item `Claude Code-credentials` (the default on macOS, where the JSON file usually does not exist), or the `CLAUDE_CODE_OAUTH_TOKEN` env var (set by `claude setup-token`)
 - OpenCode (optional provider/OAuth import source): `~/.local/share/opencode/auth.json`
 - pi (optional provider/OAuth import source): `~/.pi/agent/auth.json`
-- J-Code OpenAI/Codex OAuth: `~/.jcode/openai-auth.json`
+- J-Code OpenAI/Codex OAuth: `~/.mona/openai-auth.json`
 - Codex CLI auth source (read in place only after confirmation): `~/.codex/auth.json`
-- Gemini native OAuth: `~/.jcode/gemini_oauth.json`
+- Gemini native OAuth: `~/.mona/gemini_oauth.json`
 - Gemini CLI import fallback: `~/.gemini/oauth_creds.json`
 - Copilot CLI plaintext fallback: `~/.copilot/config.json`
 - Legacy Copilot JSON sources: `~/.config/github-copilot/hosts.json`, `~/.config/github-copilot/apps.json`
@@ -32,7 +32,7 @@ Relevant code:
 - Azure OpenAI transport: `src/provider/openrouter.rs`
 - Gemini login + refresh: `src/auth/gemini.rs`
 - Gemini Code Assist provider: `src/provider/gemini.rs`
-- OpenAI-compatible provider metadata/login descriptors: `crates/jcode-provider-metadata/src/lib.rs`
+- OpenAI-compatible provider metadata/login descriptors: `crates/mona-provider-metadata/src/lib.rs`
 
 ## Claude (Claude Max)
 
@@ -40,11 +40,11 @@ Relevant code:
 1. Run `jcode login --provider claude` (recommended), or `jcode login` and choose Claude.
    - For headless / SSH use: `jcode login --provider claude --no-browser`
    - For scriptable remote flows: `jcode login --provider claude --print-auth-url`, then later complete with `--callback-url` or `--auth-code`
-2. Alternative: run `claude` (or `claude setup-token`). jcode can detect Claude Code's credentials, ask before reading them, and remember that approval for future sessions. This works whether Claude Code stored them in `~/.claude/.credentials.json` (Linux/Windows), the macOS login Keychain (`Claude Code-credentials`), or the `CLAUDE_CODE_OAUTH_TOKEN` env var. On macOS, approving the Keychain source copies the credentials into `~/.jcode/auth.json` once so later sessions never re-prompt the Keychain.
+2. Alternative: run `claude` (or `claude setup-token`). jcode can detect Claude Code's credentials, ask before reading them, and remember that approval for future sessions. This works whether Claude Code stored them in `~/.claude/.credentials.json` (Linux/Windows), the macOS login Keychain (`Claude Code-credentials`), or the `CLAUDE_CODE_OAUTH_TOKEN` env var. On macOS, approving the Keychain source copies the credentials into `~/.mona/auth.json` once so later sessions never re-prompt the Keychain.
 3. Verify with `jcode --provider claude run "Say hello from jcode"`.
 
 Credential discovery order is:
-1. `~/.jcode/auth.json`
+1. `~/.mona/auth.json`
 2. `~/.claude/.credentials.json`
 3. Claude Code native credentials (macOS Keychain `Claude Code-credentials`, or `CLAUDE_CODE_OAUTH_TOKEN` env var) once approved
 4. `~/.local/share/opencode/auth.json`
@@ -95,14 +95,14 @@ The old Claude CLI shell-out path is deprecated and should only be used for
 legacy compatibility.
 
 You can still force it temporarily with:
-- `JCODE_USE_CLAUDE_CLI=1`
+- `MONA_USE_CLAUDE_CLI=1`
 - or `--provider claude-subprocess` (deprecated hidden compatibility value)
 
 These environment variables control the deprecated Claude Code CLI transport:
-- `JCODE_CLAUDE_CLI_PATH` (default: `claude`)
-- `JCODE_CLAUDE_CLI_MODEL` (default: `claude-opus-4-5-20251101`)
-- `JCODE_CLAUDE_CLI_PERMISSION_MODE` (default: `bypassPermissions`)
-- `JCODE_CLAUDE_CLI_PARTIAL` (set to `0` to disable partial streaming)
+- `MONA_CLAUDE_CLI_PATH` (default: `claude`)
+- `MONA_CLAUDE_CLI_MODEL` (default: `claude-opus-4-5-20251101`)
+- `MONA_CLAUDE_CLI_PERMISSION_MODE` (default: `bypassPermissions`)
+- `MONA_CLAUDE_CLI_PARTIAL` (set to `0` to disable partial streaming)
 
 ## OpenAI / Codex OAuth
 
@@ -114,10 +114,10 @@ These environment variables control the deprecated Claude Code CLI transport:
    `http://localhost:1455/auth/callback` by default.
    If port `1455` is unavailable, jcode falls back to a manual paste flow where
    you can paste the full callback URL or query string.
-3. After login, tokens are saved to `~/.jcode/openai-auth.json`.
+3. After login, tokens are saved to `~/.mona/openai-auth.json`.
 
 Credential discovery order is:
-1. `~/.jcode/openai-auth.json`
+1. `~/.mona/openai-auth.json`
 2. `~/.codex/auth.json`
 3. trusted OpenCode/pi OAuth in `~/.local/share/opencode/auth.json` / `~/.pi/agent/auth.json`
 4. `OPENAI_API_KEY`
@@ -141,7 +141,7 @@ For **API-key** usage (no ChatGPT/Codex OAuth), the Responses API base URL is
 overridable so you can target a local or proxied Responses-API endpoint. Set one
 of (checked in this order) to an absolute `http(s)://` base that ends in the API
 version, e.g. `http://127.0.0.1:8317/v1`:
-- `JCODE_OPENAI_API_BASE`
+- `MONA_OPENAI_API_BASE`
 - `OPENAI_BASE_URL`
 - `OPENAI_API_BASE`
 
@@ -208,10 +208,10 @@ The Azure env file may contain:
    - For scriptable remote flows: `jcode login --provider gemini --print-auth-url`, then later complete with `--auth-code`
 2. jcode opens a browser to the Google OAuth flow used for Gemini Code Assist unless you use `--no-browser`.
 3. If local callback binding is unavailable, jcode falls back to a manual paste flow using `https://codeassist.google.com/authcode`.
-4. Tokens are saved to `~/.jcode/gemini_oauth.json`.
+4. Tokens are saved to `~/.mona/gemini_oauth.json`.
 
 ### Credential discovery order
-1. Native jcode Gemini tokens: `~/.jcode/gemini_oauth.json`
+1. Native jcode Gemini tokens: `~/.mona/gemini_oauth.json`
 2. Gemini CLI OAuth source (read only after approval): `~/.gemini/oauth_creds.json`
 3. trusted OpenCode/pi OAuth in `~/.local/share/opencode/auth.json` / `~/.pi/agent/auth.json`
 
@@ -267,7 +267,7 @@ printf '%s' "$MY_API_KEY" | jcode provider add my-api \
 jcode --provider-profile my-api auth-test --no-tool-smoke
 ```
 
-This writes `[providers.my-api]` in `~/.jcode/config.toml` and stores the key in jcode's private app config dir, for example `~/.config/jcode/provider-my-api.env`. For localhost servers, use `--no-api-key`.
+This writes `[providers.my-api]` in `~/.mona/config.toml` and stores the key in jcode's private app config dir, for example `~/.config/jcode/provider-my-api.env`. For localhost servers, use `--no-api-key`.
 
 Notable presets include:
 
@@ -318,7 +318,7 @@ Cursor uses jcode's native HTTPS transport. Copilot uses GitHub device-flow auth
   - jcode uses native HTTPS requests
   - if a Cursor API key is configured, jcode exchanges/uses it directly
 - Env vars:
-  - `JCODE_CURSOR_MODEL` (default: `composer-1.5`)
+  - `MONA_CURSOR_MODEL` (default: `composer-1.5`)
   - `CURSOR_API_KEY` (optional; overrides saved key)
 
 ### GitHub Copilot
@@ -336,28 +336,28 @@ Cursor uses jcode's native HTTPS transport. Copilot uses GitHub device-flow auth
   7. trusted OpenCode/pi OAuth entries
   8. `gh auth token`
 - Env vars:
-  - `JCODE_COPILOT_CLI_PATH` (optional override for CLI path)
-  - `JCODE_COPILOT_MODEL` (default: `claude-sonnet-4`)
+  - `MONA_COPILOT_CLI_PATH` (optional override for CLI path)
+  - `MONA_COPILOT_MODEL` (default: `claude-sonnet-4`)
 
 ### Antigravity
 - Login: `jcode login --provider antigravity` (native Google OAuth flow; does **not** require Antigravity to be installed)
   - Headless / SSH: `jcode login --provider antigravity --no-browser`
   - Scriptable remote flow: `jcode login --provider antigravity --print-auth-url`, then later complete with `--callback-url`
-- Tokens: `~/.jcode/antigravity_oauth.json`
+- Tokens: `~/.mona/antigravity_oauth.json`
 - Credential discovery order:
-  1. native jcode tokens at `~/.jcode/antigravity_oauth.json`
+  1. native jcode tokens at `~/.mona/antigravity_oauth.json`
   2. trusted OpenCode/pi OAuth entries when present
 - Runtime:
   - jcode authenticates directly and stores/refreshes Antigravity OAuth tokens itself
   - the provider transport still shells out to the Antigravity CLI for completions if you choose `--provider antigravity`
 - Env vars:
-  - `JCODE_ANTIGRAVITY_CLIENT_ID` (optional override for OAuth client id)
-  - `JCODE_ANTIGRAVITY_CLIENT_SECRET` (optional override for OAuth client secret)
-  - `JCODE_ANTIGRAVITY_VERSION` (optional override for Antigravity request fingerprint/version)
-  - `JCODE_ANTIGRAVITY_CLI_PATH` (default: `antigravity`, runtime only)
-  - `JCODE_ANTIGRAVITY_MODEL` (default: `default`)
-  - `JCODE_ANTIGRAVITY_PROMPT_FLAG` (default: `-p`)
-  - `JCODE_ANTIGRAVITY_MODEL_FLAG` (default: `--model`)
+  - `MONA_ANTIGRAVITY_CLIENT_ID` (optional override for OAuth client id)
+  - `MONA_ANTIGRAVITY_CLIENT_SECRET` (optional override for OAuth client secret)
+  - `MONA_ANTIGRAVITY_VERSION` (optional override for Antigravity request fingerprint/version)
+  - `MONA_ANTIGRAVITY_CLI_PATH` (default: `antigravity`, runtime only)
+  - `MONA_ANTIGRAVITY_MODEL` (default: `default`)
+  - `MONA_ANTIGRAVITY_PROMPT_FLAG` (default: `-p`)
+  - `MONA_ANTIGRAVITY_MODEL_FLAG` (default: `--model`)
 
 ## Google / Gmail OAuth
 
@@ -375,7 +375,7 @@ Cursor uses jcode's native HTTPS transport. Copilot uses GitHub device-flow auth
 
 ## Scriptable auth state lifecycle
 
-- jcode stores temporary scriptable login state in `~/.jcode/pending-login/*.json`
+- jcode stores temporary scriptable login state in `~/.mona/pending-login/*.json`
 - pending state expires automatically
 - stale pending entries are cleaned up when scriptable login flows start or resume
 - Copilot `--print-auth-url` stores the GitHub device code session and `--complete` resumes polling later

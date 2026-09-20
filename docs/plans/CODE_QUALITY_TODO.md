@@ -368,7 +368,7 @@ Generated from `docs/CODE_QUALITY_AUDIT_2026-04-18.md`. This section enumerates 
 - [ ] Harden `src/safety.rs` (`unwrap`: 2, `expect`: 1, `panic!`: 1, `todo!`: 0, `unimplemented!`: 0, total: 4)
 - [ ] Harden `src/login_qr.rs` (`unwrap`: 3, `expect`: 1, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 4)
 - [ ] Harden `src/channel.rs` (`unwrap`: 4, `expect`: 0, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 4)
-- [ ] Harden `crates/jcode-tui-workspace/src/workspace_map.rs` (`unwrap`: 0, `expect`: 4, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 4)
+- [ ] Harden `crates/mona-tui-workspace/src/workspace_map.rs` (`unwrap`: 0, `expect`: 4, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 4)
 - [ ] Harden `src/tui/ui_messages.rs` (`unwrap`: 0, `expect`: 3, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 3)
 - [ ] Harden `src/tui/ui_header.rs` (`unwrap`: 0, `expect`: 2, `panic!`: 0, `todo!`: 0, `unimplemented!`: 1, total: 3)
 - [ ] Harden `src/tui/login_picker.rs` (`unwrap`: 0, `expect`: 3, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 3)
@@ -378,7 +378,7 @@ Generated from `docs/CODE_QUALITY_AUDIT_2026-04-18.md`. This section enumerates 
 - [ ] Harden `src/server/comm_plan.rs` (`unwrap`: 0, `expect`: 3, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 3)
 - [ ] Harden `src/cli/terminal.rs` (`unwrap`: 2, `expect`: 0, `panic!`: 1, `todo!`: 0, `unimplemented!`: 0, total: 3)
 - [ ] Harden `src/bin/tui_bench.rs` (`unwrap`: 0, `expect`: 3, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 3)
-- [ ] Harden `crates/jcode-provider-openrouter/src/lib.rs` (`unwrap`: 0, `expect`: 3, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 3)
+- [ ] Harden `crates/mona-provider-openrouter/src/lib.rs` (`unwrap`: 0, `expect`: 3, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 3)
 - [ ] Harden `src/video_export.rs` (`unwrap`: 0, `expect`: 2, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 2)
 - [ ] Harden `src/tui/ui_animations.rs` (`unwrap`: 0, `expect`: 0, `panic!`: 2, `todo!`: 0, `unimplemented!`: 0, total: 2)
 - [ ] Harden `src/tui/backend.rs` (`unwrap`: 0, `expect`: 1, `panic!`: 1, `todo!`: 0, `unimplemented!`: 0, total: 2)
@@ -427,7 +427,7 @@ Generated from `docs/CODE_QUALITY_AUDIT_2026-04-18.md`. This section enumerates 
 - [ ] Harden `src/config.rs` (`unwrap`: 0, `expect`: 1, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 1)
 - [ ] Harden `src/background.rs` (`unwrap`: 0, `expect`: 1, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 1)
 - [ ] Harden `src/ambient/scheduler.rs` (`unwrap`: 1, `expect`: 0, `panic!`: 0, `todo!`: 0, `unimplemented!`: 0, total: 1)
-- [ ] Harden `crates/jcode-tui-workspace/src/color_support.rs` (`unwrap`: 0, `expect`: 0, `panic!`: 1, `todo!`: 0, `unimplemented!`: 0, total: 1)
+- [ ] Harden `crates/mona-tui-workspace/src/color_support.rs` (`unwrap`: 0, `expect`: 0, `panic!`: 1, `todo!`: 0, `unimplemented!`: 0, total: 1)
 
 ### Suppression cleanup backlog
 

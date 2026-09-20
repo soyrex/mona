@@ -12,7 +12,7 @@
     "All providers now expose their complete reasoning effort ladders",
     "macOS menu bar sessions are labeled by their active work and show only your root sessions",
     "New display.overscroll_status config (off/on/overscroll) and overscroll now requires a gesture starting at the transcript bottom",
-    "New JCODE_PERF_TIER environment variable forces a performance tier for one invocation",
+    "New MONA_PERF_TIER environment variable forces a performance tier for one invocation",
     "Auto-poke stops after consecutive provider guardrail refusals instead of retrying forever",
     "Tool calls show a short intent line by default, with technical detail behind display.tool_call_details",
     "Long-idle sessions periodically release retained memory back to the OS"

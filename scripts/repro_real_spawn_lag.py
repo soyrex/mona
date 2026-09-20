@@ -5,7 +5,7 @@ home.
 
 Why this exists
 ---------------
-`repro_input_lag.py` (isolated mode) creates an empty `JCODE_HOME`, so a fresh
+`repro_input_lag.py` (isolated mode) creates an empty `MONA_HOME`, so a fresh
 client lands on the onboarding welcome screen with no transcript. That is not what
 the user spawns into. Their real environment has:
 
@@ -131,7 +131,7 @@ def measure(client, cmd_path: Path, resp_path: Path, label: str,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--binary",
-                    default=str(REPO_ROOT / "target" / "selfdev" / "jcode"))
+                    default=str(REPO_ROOT / "target" / "selfdev" / "mona"))
     ap.add_argument("--session", default=None,
                     help="session id to resume (default: most recent real one)")
     ap.add_argument("--window-s", type=float, default=4.0)
@@ -145,21 +145,21 @@ def main() -> int:
 
     # Talk to the user's real server, with their real home/config/sessions. This
     # is the configuration the lag report came from.
-    runtime = Path(os.environ.get("JCODE_RUNTIME_DIR")
+    runtime = Path(os.environ.get("MONA_RUNTIME_DIR")
                    or f"/run/user/{os.getuid()}")
     env = os.environ.copy()
-    env["JCODE_SOCKET"] = env.get("JCODE_SOCKET") or str(runtime / "jcode.sock")
-    env["JCODE_DEBUG_CONTROL"] = "1"
-    env["JCODE_THEME"] = "dark"  # never race the client for the OSC 11 reply
-    debug_sock = runtime / "jcode-debug.sock"
+    env["MONA_SOCKET"] = env.get("MONA_SOCKET") or str(runtime / "jcode.sock")
+    env["MONA_DEBUG_CONTROL"] = "1"
+    env["MONA_THEME"] = "dark"  # never race the client for the OSC 11 reply
+    debug_sock = runtime / "mona-debug.sock"
 
-    scratch = Path(os.environ.get("JCODE_SCRATCH_DIR") or tempfile.gettempdir())
-    run = Path(tempfile.mkdtemp(prefix="jcode-realspawn-", dir=str(scratch)))
+    scratch = Path(os.environ.get("MONA_SCRATCH_DIR") or tempfile.gettempdir())
+    run = Path(tempfile.mkdtemp(prefix="mona-realspawn-", dir=str(scratch)))
     cmd_path, resp_path = run / "client_cmd", run / "client_resp"
 
     print("== real-environment spawn lag ==")
     print(f"  binary : {binary}")
-    print(f"  socket : {env['JCODE_SOCKET']}")
+    print(f"  socket : {env['MONA_SOCKET']}")
 
     session = args.session or recent_session(debug_sock, str(REPO_ROOT))
     if not session:

@@ -59,7 +59,7 @@ Mode 2 starts from that same ceiling and adds LLM rewriting + listwise judgment,
 so it's strictly >= Mode 1. The harness (recall-1) tracks both columns each
 change so neither regresses.
 
-## Two operating modes (gate: `agents.memory_sidecar_enabled`, env `JCODE_MEMORY_SIDECAR_ENABLED`, default off)
+## Two operating modes (gate: `agents.memory_sidecar_enabled`, env `MONA_MEMORY_SIDECAR_ENABLED`, default off)
 
 The system runs in two distinct modes; recall behavior differs substantially.
 
@@ -165,7 +165,7 @@ Stage 4  Rerank + priors (ties into recall-5 / recall-6)
 ## Cost to quantify first (before Phase D decision)
 - Per maintenance cycle: # sidecar LLM calls (cluster naming), # graph load+save
   round-trips, bytes rewritten. Add a counter / log and measure on the real
-  `~/.jcode/memory` graphs.
+  `~/.mona/memory` graphs.
 
 ## Dependencies / ordering
 - recall-1 (eval harness) gates B/C/D measurement.
@@ -182,7 +182,7 @@ graph LR
 
 ## Implementation status (2026-06-14)
 
-Benchmark (Mode 1, private ~/jcode-memory-bench, Sonnet judge):
+Benchmark (Mode 1, private ~/mona-memory-bench, Sonnet judge):
 - DONE: harness `memory_recall_bench` (queries/pool/judge/metrics), committed.
 - Baseline: production dense (0.5 thr) = 0.0 recall@5; hybrid = 0.53.
 
@@ -219,7 +219,7 @@ Benchmark-driven results (Sonnet judge, 28 judged queries, jcode self-dev corpus
 - Embedder upgrade de-prioritized (pool recall already ~99%; bge anisotropic).
 
 Implementation split (turtle + crocodile):
-- Shared: jcode-base/src/memory_rerank.rs (prompt + parse + rerank_candidates),
+- Shared: mona-base/src/memory_rerank.rs (prompt + parse + rerank_candidates),
   used by both bench and memory_agent (single source of truth).
 - memory_agent process_context: Mode-2 reranks hybrid candidates with the focused
   query before surfacing; Mode-1 unchanged (no adequate local reranker).
@@ -258,7 +258,7 @@ rerank, reuse the main agent's warm transcript KV cache and run the reranker as
 a branch off it, so the judge's marginal cost is just the rerank suffix.
 
 Benchmark findings (claude-sonnet-4-6, 28 judged queries, see
-~/jcode-memory-bench/results/BASELINE_SUMMARY.md):
+~/mona-memory-bench/results/BASELINE_SUMMARY.md):
 - Naive (full transcript as the rerank query): QUALITY REGRESSION. recall@5
   0.81 -> 0.58, precision@5 0.34 -> 0.25. Noise dilutes even a frontier model.
 - prefix_suffix (full transcript as prefix + focused intent appended as a

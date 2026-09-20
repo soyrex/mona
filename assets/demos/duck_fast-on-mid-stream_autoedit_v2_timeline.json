@@ -104,7 +104,7 @@
     "t": 22211,
     "event": "tool_done",
     "name": "batch",
-    "output": "--- [1] bash ---\n/home/jeremy/jcode\n./figma/jcode-mobile-design-spec.md:102:- `jcode-mobile-mockup.svg` gives a fast importable preview\n./Cargo.toml:4:description = \"Possibly the greatest coding agent ever built — blazing-fast TUI, multi-model, swarm coordination, 30+ tools\"\n./RELEASING.md:3:jcode has two release paths: a fast local path for hotfixes, and CI for full releases.\n./RELEASING.md:74:- **mold linker** on Linux for faster linking.\n./RELEASING.md:93:For quick releases that also nee...",
+    "output": "--- [1] bash ---\n/home/jeremy/jcode\n./figma/mona-mobile-design-spec.md:102:- `mona-mobile-mockup.svg` gives a fast importable preview\n./Cargo.toml:4:description = \"Possibly the greatest coding agent ever built — blazing-fast TUI, multi-model, swarm coordination, 30+ tools\"\n./RELEASING.md:3:jcode has two release paths: a fast local path for hotfixes, and CI for full releases.\n./RELEASING.md:74:- **mold linker** on Linux for faster linking.\n./RELEASING.md:93:For quick releases that also nee...",
     "is_error": false
   },
   {
@@ -1108,7 +1108,7 @@
     "t": 74992,
     "event": "tool_done",
     "name": "bash",
-    "output": "Command started in background.\n\nTask ID: 076911y3sg\nOutput file: /tmp/jcode-bg-tasks/076911y3sg.output\nStatus file: /tmp/jcode-bg-tasks/076911y3sg.status.json\n\nYou will be notified when the task completes.\nTo check progress: use the `bg` tool with action=\"status\" and task_id=\"076911y3sg\"\nTo see output: use the `read` tool on the output file, or `bg` with action=\"output\"",
+    "output": "Command started in background.\n\nTask ID: 076911y3sg\nOutput file: /tmp/mona-bg-tasks/076911y3sg.output\nStatus file: /tmp/mona-bg-tasks/076911y3sg.status.json\n\nYou will be notified when the task completes.\nTo check progress: use the `bg` tool with action=\"status\" and task_id=\"076911y3sg\"\nTo see output: use the `read` tool on the output file, or `bg` with action=\"output\"",
     "is_error": false
   },
   {
@@ -1537,7 +1537,7 @@
     "event": "tool_start",
     "name": "bash",
     "input": {
-      "command": "tail -n 20 /tmp/jcode-bg-tasks/076911y3sg.output",
+      "command": "tail -n 20 /tmp/mona-bg-tasks/076911y3sg.output",
       "description": "Check build output tail",
       "notify": false,
       "run_in_background": false,

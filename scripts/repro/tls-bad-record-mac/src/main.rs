@@ -23,7 +23,7 @@ use tokio_rustls::TlsAcceptor;
 
 fn classify(error_str: &str) -> bool {
     // VERBATIM copy of jcode's shared is_transient_transport_error
-    // (crates/jcode-base/src/provider/routing.rs @ v0.24.0).
+    // (crates/mona-base/src/provider/routing.rs @ v0.24.0).
     let lower = error_str.to_ascii_lowercase();
     lower.contains("connection reset")
         || lower.contains("connection closed")

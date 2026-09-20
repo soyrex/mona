@@ -8,7 +8,7 @@ import json
 import time
 import os
 
-DEBUG_SOCKET = f"/run/user/{os.getuid()}/jcode-debug.sock"
+DEBUG_SOCKET = f"/run/user/{os.getuid()}/mona-debug.sock"
 
 def send_cmd(sock, cmd, session_id=None, timeout=120):
     """Send a debug command and get response."""

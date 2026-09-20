@@ -96,7 +96,7 @@ Host lifecycle states are `absent`, `provisioning`, `stopped`, `starting`, `read
 
 ## Rollout
 
-1. **Internal alpha:** keep the existing guarded `jcode-phone` EC2 deployment as the reference host. Validate wake, SSM, gateway, Bedrock, idle stop, and breaker paths.
+1. **Internal alpha:** keep the existing guarded `mona-phone` EC2 deployment as the reference host. Validate wake, SSM, gateway, Bedrock, idle stop, and breaker paths.
 2. **Single-account beta:** deploy AWS control-plane stacks with IaC, provision per-user hosts in `us-east-1`, and manually grant a small allowlist.
 3. **Subscription beta:** connect existing account entitlements and Stripe events, enforce tier limits, and add self-service activation.
 4. **General availability:** multi-region hosts, automated recovery, support tooling, cost attribution, deletion/export flows, and published SLOs.

@@ -52,7 +52,7 @@ memory_sidecar_enabled = false
 
 `auto` chooses the first configured credential route in this order: Jcode,
 OpenRouter, TypeSafe, then AI/ML API. Set `memory_jev_provider` (or
-`JCODE_MEMORY_JEV_PROVIDER`) explicitly to choose the account to use. Neither
+`MONA_MEMORY_JEV_PROVIDER`) explicitly to choose the account to use. Neither
 `auto` nor an explicit provider falls back to another account after an
 entitlement, auth, billing, or network failure. This prevents a failed
 subscription request from silently spending a BYOK balance. Thresholds must be
@@ -72,7 +72,7 @@ upstream Jev credential configured before this route works.** Older gateways
 without the capability fail closed. With a Jcode login configured, `auto` still
 selects Jcode on an older gateway. To use BYOK in that situation, explicitly set
 `memory_jev_provider` to `openrouter`, `typesafe`, or `aimlapi` (or use
-`JCODE_MEMORY_JEV_PROVIDER`). There is no automatic fallback. BYOK does not depend
+`MONA_MEMORY_JEV_PROVIDER`). There is no automatic fallback. BYOK does not depend
 on the gateway rollout.
 
 ## Request and failure boundaries
@@ -100,8 +100,8 @@ on the gateway rollout.
 
 The existing graph JSON format remains compatible:
 
-- `~/.jcode/memory/global.json`
-- `~/.jcode/memory/projects/<working-directory-hash>.json`
+- `~/.mona/memory/global.json`
+- `~/.mona/memory/projects/<working-directory-hash>.json`
 
 Tags, relationships, categories, trust, sources, and superseded/inactive entries
 are retained. Writes no longer create embeddings. Exact duplicate content within
@@ -142,12 +142,12 @@ remain useful without making remote requests.
 
 ## Implementation map
 
-- `crates/jcode-base/src/jev.rs`: provider-specific credentials and bounded HTTP.
-- `crates/jcode-base/src/memory_jev.rs`: direct batched relevance selection.
-- `crates/jcode-base/src/memory_agent.rs`: asynchronous per-session coordinator.
-- `crates/jcode-base/src/memory.rs`: local storage and public compatibility APIs.
-- `crates/jcode-base/src/memory/pending.rs`: scope-bound pending injection.
-- `crates/jcode-app-core/src/tool/memory.rs`: public memory tool.
+- `crates/mona-base/src/jev.rs`: provider-specific credentials and bounded HTTP.
+- `crates/mona-base/src/memory_jev.rs`: direct batched relevance selection.
+- `crates/mona-base/src/memory_agent.rs`: asynchronous per-session coordinator.
+- `crates/mona-base/src/memory.rs`: local storage and public compatibility APIs.
+- `crates/mona-base/src/memory/pending.rs`: scope-bound pending injection.
+- `crates/mona-app-core/src/tool/memory.rs`: public memory tool.
 
 ## Upstream references
 

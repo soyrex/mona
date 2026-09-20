@@ -21,7 +21,7 @@ import signal
 
 NUM_INSTANCES = int(sys.argv[1]) if len(sys.argv) > 1 else 40
 MAIN_SOCK = f"/run/user/{os.getuid()}/jcode.sock"
-DEBUG_SOCK = f"/run/user/{os.getuid()}/jcode-debug.sock"
+DEBUG_SOCK = f"/run/user/{os.getuid()}/mona-debug.sock"
 
 class Colors:
     BOLD = "\033[1m"
@@ -61,7 +61,7 @@ def get_server_pid():
     """Get the jcode server PID."""
     try:
         result = subprocess.run(
-            ["lsof", "-U", "-a", "-c", "jcode"],
+            ["lsof", "-U", "-a", "-c", "mona"],
             capture_output=True, text=True, timeout=5
         )
         for line in result.stdout.splitlines():
@@ -74,7 +74,7 @@ def get_server_pid():
     # Fallback: find the oldest jcode process (likely the server)
     try:
         result = subprocess.run(
-            ["pgrep", "-o", "jcode"], capture_output=True, text=True, timeout=5
+            ["pgrep", "-o", "mona"], capture_output=True, text=True, timeout=5
         )
         if result.stdout.strip():
             return int(result.stdout.strip().splitlines()[0])
@@ -142,7 +142,7 @@ if not os.path.exists(MAIN_SOCK):
 
 if not os.path.exists(DEBUG_SOCK):
     print_err(f"No debug socket at {DEBUG_SOCK}")
-    print("  Enable with: touch ~/.jcode/debug_control")
+    print("  Enable with: touch ~/.mona/debug_control")
     sys.exit(1)
 
 # Test connectivity
@@ -164,7 +164,7 @@ else:
 print_section("Baseline measurements")
 
 baseline = proc_stat(server_pid) if server_pid else {}
-baseline_procs = int(subprocess.run(["pgrep", "-c", "jcode"], capture_output=True, text=True).stdout.strip() or "0")
+baseline_procs = int(subprocess.run(["pgrep", "-c", "mona"], capture_output=True, text=True).stdout.strip() or "0")
 
 print_stat("Server RSS", fmt_kb(baseline.get("rss_kb", 0)))
 print_stat("Server VMS", fmt_kb(baseline.get("vms_kb", 0)))
@@ -191,7 +191,7 @@ per_session_stats = []
 
 for i in range(1, NUM_INSTANCES + 1):
     t0 = time.monotonic()
-    resp = debug_cmd(f"create_session:/tmp/jcode-stress-{i}", timeout=30)
+    resp = debug_cmd(f"create_session:/tmp/mona-stress-{i}", timeout=30)
     t1 = time.monotonic()
     elapsed_ms = (t1 - t0) * 1000
     create_times.append(elapsed_ms)
@@ -278,7 +278,7 @@ if message_times:
 print_section("Phase 4: Peak resource usage")
 
 peak = proc_stat(server_pid) if server_pid else {}
-peak_procs = int(subprocess.run(["pgrep", "-c", "jcode"], capture_output=True, text=True).stdout.strip() or "0")
+peak_procs = int(subprocess.run(["pgrep", "-c", "mona"], capture_output=True, text=True).stdout.strip() or "0")
 
 print_stat("Server RSS", fmt_kb(peak.get("rss_kb", 0)))
 print_stat("Server VMS", fmt_kb(peak.get("vms_kb", 0)))
@@ -325,7 +325,7 @@ print_section("Phase 6: Resource recovery (waiting 10s for cleanup)")
 time.sleep(10)
 
 final = proc_stat(server_pid) if server_pid else {}
-final_procs = int(subprocess.run(["pgrep", "-c", "jcode"], capture_output=True, text=True).stdout.strip() or "0")
+final_procs = int(subprocess.run(["pgrep", "-c", "mona"], capture_output=True, text=True).stdout.strip() or "0")
 
 # Final socket test
 t0 = time.monotonic()

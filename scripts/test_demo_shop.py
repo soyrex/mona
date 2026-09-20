@@ -21,7 +21,7 @@ class DemoShopTests(unittest.TestCase):
             [sys.executable, str(SCRIPT), *args],
             capture_output=True,
             text=True,
-            env={**os.environ, "JCODE_DEMO_SHOP_STATE": str(state)},
+            env={**os.environ, "MONA_DEMO_SHOP_STATE": str(state)},
             timeout=10,
         )
 
@@ -102,7 +102,7 @@ class DemoShopTests(unittest.TestCase):
             if line.startswith("PROMPT=")
         )
         lowered = prompt_line.lower()
-        self.assertIn("Use `./bin/jcode-demo-shop`", prompt_line)
+        self.assertIn("Use `./bin/mona-demo-shop`", prompt_line)
         self.assertIn("USB-C laptop charger", prompt_line)
         self.assertIn("work through any prerequisites", lowered)
         self.assertIn("ask me for confirmation immediately before", lowered)

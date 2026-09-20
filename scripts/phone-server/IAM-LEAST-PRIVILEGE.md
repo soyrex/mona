@@ -13,7 +13,7 @@ This document began as a design review. The live hardening described in `README.
 Replace it with an assume-role-only principal and three distinct privilege planes:
 
 1. **`JcodePhoneOperator`** for normal deployments and maintenance of the existing stack.
-2. **`JcodePhoneProvisioner`** for infrequent rebuilds, MFA-gated, time-limited, restricted to `us-east-1`, `jcode-phone-*` resources, and bounded runtime roles.
+2. **`JcodePhoneProvisioner`** for infrequent rebuilds, MFA-gated, time-limited, restricted to `us-east-1`, `mona-phone-*` resources, and bounded runtime roles.
 3. **A separate emergency administrator path** protected by MFA and never used by automation. This is required to avoid lockout while removing the existing administrator attachment.
 
 Also replace the instance's `AmazonBedrockFullAccess` with inference-only permissions. The code uses model catalog discovery and `ConverseStream`; it does not need Bedrock administration.
@@ -24,7 +24,7 @@ Repository evidence:
 
 - `README.md` states account `302154194530`, region `us-east-1`, instance `i-08214cf66cd3f80c7`, Elastic IP `54.196.207.97`, and API ID `8c3wp4cbag`.
 - `wake-lambda.py` calls `ec2:DescribeInstances` and `ec2:StartInstances` for that instance.
-- `breaker-lambda.py` calls `ec2:DescribeInstances`, `ec2:StopInstances`, and `sns:Publish` to `arn:aws:sns:us-east-1:302154194530:jcode-guard-warn`.
+- `breaker-lambda.py` calls `ec2:DescribeInstances`, `ec2:StopInstances`, and `sns:Publish` to `arn:aws:sns:us-east-1:302154194530:mona-guard-warn`.
 - The Bedrock provider calls `ListFoundationModels`, `ListInferenceProfiles`, and the streaming Converse API. Converse streaming is authorized by `bedrock:InvokeModelWithResponseStream`.
 - The rebuild instructions require EC2, EIP, security group, IAM instance profile, Lambda, API Gateway v2, SNS, CloudWatch alarms, and Budgets administration.
 - TestFlight automation is App Store Connect only and requires no AWS permission.
@@ -37,17 +37,17 @@ Stated named resources:
 |---|---|
 | EC2 instance | `arn:aws:ec2:us-east-1:302154194530:instance/i-08214cf66cd3f80c7` |
 | Elastic IP | `54.196.207.97`; allocation ID must be inventoried |
-| Lambda | `jcode-phone-wake` |
-| Lambda | `jcode-guard-breaker` |
+| Lambda | `mona-phone-wake` |
+| Lambda | `mona-guard-breaker` |
 | API Gateway v2 | `8c3wp4cbag` |
-| SNS | `jcode-guard-stop` and `jcode-guard-warn` |
-| CloudWatch alarms | `jcode-bedrock-tokens-warn`, `jcode-bedrock-tokens-stop`; the ineffective billing alarms were replaced by the working Budget/SNS breaker path |
-| Budget | `jcode-dev-monthly-cost` |
+| SNS | `mona-guard-stop` and `mona-guard-warn` |
+| CloudWatch alarms | `mona-bedrock-tokens-warn`, `mona-bedrock-tokens-stop`; the ineffective billing alarms were replaced by the working Budget/SNS breaker path |
+| Budget | `mona-dev-monthly-cost` |
 | Bedrock model route | `us.anthropic.claude-opus-4-6-v1` |
 
 ### Live-state verification
 
-The account was subsequently inventoried through the `jcode-bedrock` profile. Runtime role names, Lambda roles, the EC2 instance and security group, the Elastic IP, Budget subscribers, CloudWatch alarms, log retention, API Gateway stage, S3/DynamoDB resources, and access-key metadata were verified directly. The wake Lambda now uses SSM pairing, all public EC2 ingress is closed, the root EBS volume is encrypted, CloudTrail and Access Analyzer are enabled, and the old deployment key is inactive.
+The account was subsequently inventoried through the `mona-bedrock` profile. Runtime role names, Lambda roles, the EC2 instance and security group, the Elastic IP, Budget subscribers, CloudWatch alarms, log retention, API Gateway stage, S3/DynamoDB resources, and access-key metadata were verified directly. The wake Lambda now uses SSM pairing, all public EC2 ingress is closed, the root EBS volume is encrypted, CloudTrail and Access Analyzer are enabled, and the old deployment key is inactive.
 
 ## Target identity design
 
@@ -77,8 +77,8 @@ Assume-only policy for `jade-deploy`:
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
       "Resource": [
-        "arn:aws:iam::302154194530:role/jcode-phone/JcodePhoneOperator",
-        "arn:aws:iam::302154194530:role/jcode-phone/JcodePhoneProvisioner"
+        "arn:aws:iam::302154194530:role/mona-phone/JcodePhoneOperator",
+        "arn:aws:iam::302154194530:role/mona-phone/JcodePhoneProvisioner"
       ]
     }
   ]
@@ -174,7 +174,7 @@ Verify the exact inference-profile ARN and backing model IDs with `bedrock list-
         "logs:CreateLogStream",
         "logs:PutLogEvents"
       ],
-      "Resource": "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/jcode-phone-wake:*"
+      "Resource": "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/mona-phone-wake:*"
     }
   ]
 }
@@ -237,7 +237,7 @@ That variant also requires an SSM-managed-instance policy on the EC2 role. Keep 
       "Sid": "PublishGuardNotification",
       "Effect": "Allow",
       "Action": "sns:Publish",
-      "Resource": "arn:aws:sns:us-east-1:302154194530:jcode-guard-warn"
+      "Resource": "arn:aws:sns:us-east-1:302154194530:mona-guard-warn"
     },
     {
       "Sid": "WriteOwnLogs",
@@ -246,7 +246,7 @@ That variant also requires an SSM-managed-instance policy on the EC2 role. Keep 
         "logs:CreateLogStream",
         "logs:PutLogEvents"
       ],
-      "Resource": "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/jcode-guard-breaker:*"
+      "Resource": "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/mona-guard-breaker:*"
     }
   ]
 }
@@ -287,10 +287,10 @@ Replace the `<...>` values after read-only inventory. The API Gateway resource f
         "lambda:GetPolicy"
       ],
       "Resource": [
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-phone-wake",
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-phone-wake:*",
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-guard-breaker",
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-guard-breaker:*"
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-phone-wake",
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-phone-wake:*",
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-guard-breaker",
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-guard-breaker:*"
       ]
     },
     {
@@ -317,10 +317,10 @@ Replace the `<...>` values after read-only inventory. The API Gateway resource f
         "lambda:InvokeFunction"
       ],
       "Resource": [
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-phone-wake",
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-phone-wake:*",
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-guard-breaker",
-        "arn:aws:lambda:us-east-1:302154194530:function:jcode-guard-breaker:*"
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-phone-wake",
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-phone-wake:*",
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-guard-breaker",
+        "arn:aws:lambda:us-east-1:302154194530:function:mona-guard-breaker:*"
       ]
     },
     {
@@ -348,7 +348,7 @@ Replace the `<...>` values after read-only inventory. The API Gateway resource f
       "Sid": "PassInstanceRoleToEc2Only",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::302154194530:role/jcode-phone/runtime/JcodePhoneInstance",
+      "Resource": "arn:aws:iam::302154194530:role/mona-phone/runtime/JcodePhoneInstance",
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "ec2.amazonaws.com"
@@ -360,8 +360,8 @@ Replace the `<...>` values after read-only inventory. The API Gateway resource f
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": [
-        "arn:aws:iam::302154194530:role/jcode-phone/runtime/JcodePhoneWakeLambda",
-        "arn:aws:iam::302154194530:role/jcode-phone/runtime/JcodePhoneBreakerLambda"
+        "arn:aws:iam::302154194530:role/mona-phone/runtime/JcodePhoneWakeLambda",
+        "arn:aws:iam::302154194530:role/mona-phone/runtime/JcodePhoneBreakerLambda"
       ],
       "Condition": {
         "StringEquals": {
@@ -378,8 +378,8 @@ Replace the `<...>` values after read-only inventory. The API Gateway resource f
         "logs:FilterLogEvents"
       ],
       "Resource": [
-        "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/jcode-phone-wake:*",
-        "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/jcode-guard-breaker:*"
+        "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/mona-phone-wake:*",
+        "arn:aws:logs:us-east-1:302154194530:log-group:/aws/lambda/mona-guard-breaker:*"
       ]
     },
     {
@@ -391,15 +391,15 @@ Replace the `<...>` values after read-only inventory. The API Gateway resource f
         "sns:Publish"
       ],
       "Resource": [
-        "arn:aws:sns:us-east-1:302154194530:jcode-guard-stop",
-        "arn:aws:sns:us-east-1:302154194530:jcode-guard-warn"
+        "arn:aws:sns:us-east-1:302154194530:mona-guard-stop",
+        "arn:aws:sns:us-east-1:302154194530:mona-guard-warn"
       ]
     },
     {
       "Sid": "ReadNamedBudget",
       "Effect": "Allow",
       "Action": "budgets:ViewBudget",
-      "Resource": "arn:aws:budgets::302154194530:budget/jcode-dev-monthly-cost"
+      "Resource": "arn:aws:budgets::302154194530:budget/mona-dev-monthly-cost"
     }
   ]
 }
@@ -418,10 +418,10 @@ A rebuild inherently needs create/delete privileges on several services. Keep th
 
 Recommended model:
 
-- Human `JcodePhoneProvisioner`: CloudFormation stack operations on `jcode-phone-server*`, read-only diagnostics, and `iam:PassRole` only for `JcodePhoneCloudFormationExecution` with `iam:PassedToService = cloudformation.amazonaws.com`.
+- Human `JcodePhoneProvisioner`: CloudFormation stack operations on `mona-phone-server*`, read-only diagnostics, and `iam:PassRole` only for `JcodePhoneCloudFormationExecution` with `iam:PassedToService = cloudformation.amazonaws.com`.
 - `JcodePhoneCloudFormationExecution`: service permissions below, usable only by CloudFormation.
-- Every created resource is tagged `Project=jcode-phone-server` and `ManagedBy=cloudformation`.
-- Every created runtime role is under path `/jcode-phone/runtime/` and must carry the `JcodePhoneRuntimeBoundary` permissions boundary.
+- Every created resource is tagged `Project=mona-phone-server` and `ManagedBy=cloudformation`.
+- Every created runtime role is under path `/mona-phone/runtime/` and must carry the `JcodePhoneRuntimeBoundary` permissions boundary.
 
 Human provisioner policy:
 
@@ -449,8 +449,8 @@ Human provisioner policy:
         "cloudformation:ValidateTemplate"
       ],
       "Resource": [
-        "arn:aws:cloudformation:us-east-1:302154194530:stack/jcode-phone-server*/*",
-        "arn:aws:cloudformation:us-east-1:302154194530:changeSet/jcode-phone-server*/*"
+        "arn:aws:cloudformation:us-east-1:302154194530:stack/mona-phone-server*/*",
+        "arn:aws:cloudformation:us-east-1:302154194530:changeSet/mona-phone-server*/*"
       ]
     },
     {
@@ -463,7 +463,7 @@ Human provisioner policy:
       "Sid": "PassPhoneCloudFormationExecutionRole",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::302154194530:role/jcode-phone/JcodePhoneCloudFormationExecution",
+      "Resource": "arn:aws:iam::302154194530:role/mona-phone/JcodePhoneCloudFormationExecution",
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "cloudformation.amazonaws.com"
@@ -478,14 +478,14 @@ The CloudFormation execution role should permit only this service/action envelop
 
 | Service | Required rebuild operations | Scope/guardrail |
 |---|---|---|
-| EC2 | Run/terminate the one server; create/tag volume and ENI; create/manage one SG; allocate/associate/release one EIP; modify shutdown behavior; describe AMIs/subnets/VPCs | `us-east-1`; request/resource tag `Project=jcode-phone-server`; approved instance types only; IMDSv2 required; approved VPC/subnet |
-| IAM | Create/update/delete the three runtime roles and one instance profile; put/delete inline policies; pass roles | Path `/jcode-phone/runtime/` only; require boundary ARN on `CreateRole`; never allow changing deploy/provisioner/emergency roles |
-| Lambda | Create/update/delete the two named functions; versions/aliases; permissions | Function ARN prefix `jcode-phone-*` and `jcode-guard-breaker*`; project tag |
+| EC2 | Run/terminate the one server; create/tag volume and ENI; create/manage one SG; allocate/associate/release one EIP; modify shutdown behavior; describe AMIs/subnets/VPCs | `us-east-1`; request/resource tag `Project=mona-phone-server`; approved instance types only; IMDSv2 required; approved VPC/subnet |
+| IAM | Create/update/delete the three runtime roles and one instance profile; put/delete inline policies; pass roles | Path `/mona-phone/runtime/` only; require boundary ARN on `CreateRole`; never allow changing deploy/provisioner/emergency roles |
+| Lambda | Create/update/delete the two named functions; versions/aliases; permissions | Function ARN prefix `mona-phone-*` and `mona-guard-breaker*`; project tag |
 | API Gateway v2 | Create/update/delete one HTTP API, integration, route, and stage | Project tag and stack ownership |
-| SNS | Create/manage/delete `jcode-guard-stop` and `jcode-guard-warn`; subscriptions | Exact topic-name ARNs |
+| SNS | Create/manage/delete `mona-guard-stop` and `mona-guard-warn`; subscriptions | Exact topic-name ARNs |
 | CloudWatch | Create/update/delete the four named alarms | Exact alarm-name ARNs |
 | Logs | Create/configure/delete the two Lambda log groups | Exact `/aws/lambda/...` ARNs; retention required |
-| Budgets | Create/update/delete `jcode-dev-monthly-cost` | Exact budget ARN |
+| Budgets | Create/update/delete `mona-dev-monthly-cost` | Exact budget ARN |
 
 The execution role, not the daily operator, also owns `lambda:AddPermission`/`RemovePermission`, `sns:Subscribe`/`Unsubscribe`, CloudWatch alarm mutation, and budget mutation. This preserves integration and guardrail maintenance without making those high-impact actions part of everyday credentials.
 
@@ -512,12 +512,12 @@ aws iam get-account-authorization-details > phone-server-iam-before.json
 
 aws ec2 describe-instances --instance-ids i-08214cf66cd3f80c7 --region us-east-1
 aws ec2 describe-addresses --public-ips 54.196.207.97 --region us-east-1
-aws lambda get-function --function-name jcode-phone-wake --region us-east-1
-aws lambda get-function --function-name jcode-guard-breaker --region us-east-1
+aws lambda get-function --function-name mona-phone-wake --region us-east-1
+aws lambda get-function --function-name mona-guard-breaker --region us-east-1
 aws apigatewayv2 get-api --api-id 8c3wp4cbag --region us-east-1
 aws sns list-topics --region us-east-1
-aws cloudwatch describe-alarms --alarm-name-prefix jcode- --region us-east-1
-aws budgets describe-budget --account-id 302154194530 --budget-name jcode-dev-monthly-cost
+aws cloudwatch describe-alarms --alarm-name-prefix mona- --region us-east-1
+aws budgets describe-budget --account-id 302154194530 --budget-name mona-dev-monthly-cost
 aws bedrock list-inference-profiles --type-equals SYSTEM_DEFINED --region us-east-1
 ```
 
@@ -532,7 +532,7 @@ Also inventory CloudTrail usage for at least 30 days. Add an action only when it
 5. **Grant assume-only access while admin remains attached.** Attach the small `sts:AssumeRole` policy to `jade-deploy`, but leave `AdministratorAccess` temporarily attached.
 6. **Test role entry.** From a distinct profile/session, assume each role and confirm `aws sts get-caller-identity` reports the role ARN. Confirm operator reads for EC2, Lambda, API Gateway, logs, SNS, alarms, and budget.
 7. **Simulate every required API call.** Use `iam:SimulatePrincipalPolicy` or the policy simulator for the action/resource matrix in this document. Explicitly test denied controls such as creating users, attaching `AdministratorAccess`, terminating arbitrary instances, and deleting guardrails.
-8. **Canary mutation paths without touching production.** Through the provisioner, deploy and remove a tiny tagged canary stack using the same resource classes where practical. For the operator, update a disposable Lambda alias or canary function rather than invoking `jcode-guard-breaker`, which stops production. Do not use the breaker invocation as an IAM test.
+8. **Canary mutation paths without touching production.** Through the provisioner, deploy and remove a tiny tagged canary stack using the same resource classes where practical. For the operator, update a disposable Lambda alias or canary function rather than invoking `mona-guard-breaker`, which stops production. Do not use the breaker invocation as an IAM test.
 9. **Switch runtime roles one at a time.** First update Lambda execution roles and verify logs plus harmless wake status checks. Then replace the EC2 instance profile and run a real Bedrock streaming request. Keep the previous roles intact but unattached until verification completes.
 10. **Rotate the credential transport.** Preferred: switch the workstation to IAM Identity Center and role profiles. Transitional IAM-user option: create a second `jade-deploy` access key, configure it under a new profile, and verify role assumption. Never overwrite the only working profile first. An IAM user can have at most two keys.
 11. **Detach `AdministratorAccess` only after independent recovery succeeds.** Confirm the emergency administrator path in a separate browser/profile immediately before detachment. Then detach `AdministratorAccess` from `jade-deploy`. Do not delete the user, keys, old runtime roles, or old policies in the same change window.

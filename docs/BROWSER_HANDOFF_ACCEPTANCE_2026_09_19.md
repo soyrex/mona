@@ -27,7 +27,7 @@ instruction and are excluded from speed comparisons, not silently discarded.
 - SHA-256: `eae091b252d546cca723a465acfb5e3085bd33eea428642c27513cda5f27c63f`.
 - Built version: `50c4533fb-dirty-8dce190e3d68`. Its Rust changes were subsequently
   committed as `831171a47` without changing the measured Rust source.
-- Immutable artifact: `~/.jcode/builds/versions/50c4533fb-dirty-8dce190e3d68/jcode`.
+- Immutable artifact: `~/.mona/builds/versions/50c4533fb-dirty-8dce190e3d68/jcode`.
   A later confidence audit reconfirmed its SHA-256 above. Other concurrent work
   has since replaced `target/selfdev/jcode`, so use the immutable artifact when
   reproducing these particular measurements.
@@ -67,7 +67,7 @@ by enabling debug control only on the private daemon and passing its socket to
 the debug subcommand explicitly.
 
 Local raw evidence is retained under
-`$JCODE_SCRATCH_DIR/browser-handoff-benchmark-byok-v2/`, including per-trial prompts,
+`$MONA_SCRATCH_DIR/browser-handoff-benchmark-byok-v2/`, including per-trial prompts,
 NDJSON transcripts, independent result records, binary metadata and summary.
 See `scripts/benchmark_browser_handoff.md` for repeatable invocation.
 
@@ -136,8 +136,8 @@ handoffs and the continuing need for safe parent recovery on complex pages.
 Local raw evidence, including exact prompts, complete NDJSON tool results,
 independent public-page snapshots, answers and binary hashes, is retained under:
 
-- `$JCODE_SCRATCH_DIR/browser-handoff-public-rust/`
-- `$JCODE_SCRATCH_DIR/browser-handoff-public-python/`
+- `$MONA_SCRATCH_DIR/browser-handoff-public-rust/`
+- `$MONA_SCRATCH_DIR/browser-handoff-public-python/`
 
 Real-site acceptance therefore extends the fixture result to actual user-facing
 CLI/browser workflows, while retaining the subscription and activation blockers
@@ -146,7 +146,7 @@ below. No BYOK result is presented as subscriber acceptance.
 ## Subscription implementation and blockers
 
 The browser uses the shared Jev client with a separate browser purpose and
-`JCODE_BROWSER_JEV_PROVIDER`. Auto selection prefers Jcode credentials, checks
+`MONA_BROWSER_JEV_PROVIDER`. Auto selection prefers Jcode credentials, checks
 live `/v1/me` capability `browser_jev`, then uses bounded typed choice requests at
 `/v1/decisions`. It never silently spends a BYOK balance after an entitlement or
 billing failure. Memory provider selection and `memory_jev` gating remain separate.
@@ -157,7 +157,7 @@ gating with a shared account-wide quota (60 attempts/minute, 1,000/day by defaul
 Memory and browser calls cannot bypass that quota by switching purpose.
 
 Live subscription verification was attempted with
-`JCODE_BROWSER_JEV_PROVIDER=jcode` and the ignored
+`MONA_BROWSER_JEV_PROVIDER=jcode` and the ignored
 `live_subscription_jev_decision_smoke` test. It stopped at missing Jcode credentials,
 without falling back or transmitting fixture data. A read-only deployed secret
 name check separately confirmed that the gateway has no `OPENROUTER_API_KEY`.
@@ -171,7 +171,7 @@ To finish subscription acceptance:
 3. Deploy the reviewed backend change and verify `browser_jev: true` for the
    entitled account, while denied accounts remain denied.
 4. Run the subscription-only smoke test, then the fresh-session benchmark with
-   `JCODE_BROWSER_JEV_PROVIDER=jcode` and expected provider `jcode`.
+   `MONA_BROWSER_JEV_PROVIDER=jcode` and expected provider `jcode`.
 
 ## Other verification and activation
 

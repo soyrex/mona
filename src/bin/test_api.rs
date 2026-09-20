@@ -1,7 +1,7 @@
 use futures::StreamExt;
-use jcode::message::{ContentBlock, Message, ToolDefinition};
-use jcode::provider::Provider;
-use jcode_provider_claude_cli_runtime::ClaudeProvider;
+use mona::message::{ContentBlock, Message, ToolDefinition};
+use mona::provider::Provider;
+use mona_provider_claude_cli_runtime::ClaudeProvider;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
     let provider = ClaudeProvider::new();
 
     let messages = vec![Message {
-        role: jcode::message::Role::User,
+        role: mona::message::Role::User,
         content: vec![ContentBlock::Text {
             text: "Say hello in exactly 5 words.".to_string(),
             cache_control: None,

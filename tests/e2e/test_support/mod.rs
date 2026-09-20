@@ -7,13 +7,13 @@ pub(crate) use crate::mock_provider::MockProvider;
 pub(crate) use anyhow::{Context, Result};
 pub(crate) use async_trait::async_trait;
 pub(crate) use futures::{SinkExt, StreamExt, stream};
-pub(crate) use jcode::agent::Agent;
-pub(crate) use jcode::message::{ContentBlock, Message, Role, StreamEvent, ToolDefinition};
-pub(crate) use jcode::protocol::{Request, ServerEvent};
-pub(crate) use jcode::provider::{EventStream, Provider};
-pub(crate) use jcode::server;
-pub(crate) use jcode::session::{Session, StoredCompactionState};
-pub(crate) use jcode::tool::Registry;
+pub(crate) use mona::agent::Agent;
+pub(crate) use mona::message::{ContentBlock, Message, Role, StreamEvent, ToolDefinition};
+pub(crate) use mona::protocol::{Request, ServerEvent};
+pub(crate) use mona::provider::{EventStream, Provider};
+pub(crate) use mona::server;
+pub(crate) use mona::session::{Session, StoredCompactionState};
+pub(crate) use mona::tool::Registry;
 pub(crate) use std::ffi::OsString;
 pub(crate) use std::io::Read;
 pub(crate) use std::net::TcpListener as StdTcpListener;
@@ -31,7 +31,7 @@ pub(crate) use tokio_tungstenite::connect_async;
 pub(crate) use tokio_tungstenite::tungstenite::Message as WsMessage;
 pub(crate) use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-static JCODE_HOME_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+static MONA_HOME_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
 
 pub(crate) fn short_runtime_dir(name: String) -> std::path::PathBuf {
     #[cfg(unix)]
@@ -44,8 +44,8 @@ pub(crate) fn short_runtime_dir(name: String) -> std::path::PathBuf {
     }
 }
 
-fn lock_jcode_home() -> std::sync::MutexGuard<'static, ()> {
-    let mutex = JCODE_HOME_LOCK.get_or_init(|| Mutex::new(()));
+fn lock_mona_home() -> std::sync::MutexGuard<'static, ()> {
+    let mutex = MONA_HOME_LOCK.get_or_init(|| Mutex::new(()));
     // Recover from poisoned state if a previous test panicked
     match mutex.lock() {
         Ok(guard) => guard,
@@ -67,33 +67,33 @@ pub(crate) struct TestEnvGuard {
 
 impl TestEnvGuard {
     pub(crate) fn new() -> Result<Self> {
-        let lock = lock_jcode_home();
+        let lock = lock_mona_home();
         let temp_home = tempfile::Builder::new()
-            .prefix("jcode-e2e-home-")
+            .prefix("mona-e2e-home-")
             .tempdir()?;
-        let prev_home = std::env::var_os("JCODE_HOME");
-        let prev_runtime_dir = std::env::var_os("JCODE_RUNTIME_DIR");
-        let prev_test_session = std::env::var_os("JCODE_TEST_SESSION");
-        let prev_debug_control = std::env::var_os("JCODE_DEBUG_CONTROL");
-        let prev_runtime_provider = std::env::var_os("JCODE_RUNTIME_PROVIDER");
-        let prev_active_provider = std::env::var_os("JCODE_ACTIVE_PROVIDER");
-        let prev_openrouter_cache_namespace = std::env::var_os("JCODE_OPENROUTER_CACHE_NAMESPACE");
+        let prev_home = std::env::var_os("MONA_HOME");
+        let prev_runtime_dir = std::env::var_os("MONA_RUNTIME_DIR");
+        let prev_test_session = std::env::var_os("MONA_TEST_SESSION");
+        let prev_debug_control = std::env::var_os("MONA_DEBUG_CONTROL");
+        let prev_runtime_provider = std::env::var_os("MONA_RUNTIME_PROVIDER");
+        let prev_active_provider = std::env::var_os("MONA_ACTIVE_PROVIDER");
+        let prev_openrouter_cache_namespace = std::env::var_os("MONA_OPENROUTER_CACHE_NAMESPACE");
         let runtime_dir = temp_home.path().join("runtime");
         std::fs::create_dir_all(&runtime_dir)?;
 
-        jcode::env::set_var("JCODE_HOME", temp_home.path());
-        jcode::env::set_var("JCODE_RUNTIME_DIR", &runtime_dir);
-        jcode::env::set_var("JCODE_TEST_SESSION", "1");
-        jcode::env::set_var("JCODE_DEBUG_CONTROL", "1");
-        jcode::env::remove_var("JCODE_RUNTIME_PROVIDER");
-        jcode::env::remove_var("JCODE_ACTIVE_PROVIDER");
-        jcode::env::remove_var("JCODE_OPENROUTER_CACHE_NAMESPACE");
+        mona::env::set_var("MONA_HOME", temp_home.path());
+        mona::env::set_var("MONA_RUNTIME_DIR", &runtime_dir);
+        mona::env::set_var("MONA_TEST_SESSION", "1");
+        mona::env::set_var("MONA_DEBUG_CONTROL", "1");
+        mona::env::remove_var("MONA_RUNTIME_PROVIDER");
+        mona::env::remove_var("MONA_ACTIVE_PROVIDER");
+        mona::env::remove_var("MONA_OPENROUTER_CACHE_NAMESPACE");
         // Disable the memory sidecar/extraction in e2e runs. Its background
         // extraction makes its own provider `complete()` call, which would steal
         // a queued mock response from the scenario under test and make turn
         // outcomes nondeterministic across transports.
-        jcode::env::set_var("JCODE_MEMORY_ENABLED", "0");
-        jcode::env::set_var("JCODE_MEMORY_SIDECAR_ENABLED", "0");
+        mona::env::set_var("MONA_MEMORY_ENABLED", "0");
+        mona::env::set_var("MONA_MEMORY_SIDECAR_ENABLED", "0");
 
         Ok(Self {
             _lock: lock,
@@ -112,48 +112,48 @@ impl TestEnvGuard {
 impl Drop for TestEnvGuard {
     fn drop(&mut self) {
         if let Some(prev_home) = &self.prev_home {
-            jcode::env::set_var("JCODE_HOME", prev_home);
+            mona::env::set_var("MONA_HOME", prev_home);
         } else {
-            jcode::env::remove_var("JCODE_HOME");
+            mona::env::remove_var("MONA_HOME");
         }
 
         if let Some(prev_runtime_dir) = &self.prev_runtime_dir {
-            jcode::env::set_var("JCODE_RUNTIME_DIR", prev_runtime_dir);
+            mona::env::set_var("MONA_RUNTIME_DIR", prev_runtime_dir);
         } else {
-            jcode::env::remove_var("JCODE_RUNTIME_DIR");
+            mona::env::remove_var("MONA_RUNTIME_DIR");
         }
 
         if let Some(prev_test_session) = &self.prev_test_session {
-            jcode::env::set_var("JCODE_TEST_SESSION", prev_test_session);
+            mona::env::set_var("MONA_TEST_SESSION", prev_test_session);
         } else {
-            jcode::env::remove_var("JCODE_TEST_SESSION");
+            mona::env::remove_var("MONA_TEST_SESSION");
         }
 
         if let Some(prev_debug_control) = &self.prev_debug_control {
-            jcode::env::set_var("JCODE_DEBUG_CONTROL", prev_debug_control);
+            mona::env::set_var("MONA_DEBUG_CONTROL", prev_debug_control);
         } else {
-            jcode::env::remove_var("JCODE_DEBUG_CONTROL");
+            mona::env::remove_var("MONA_DEBUG_CONTROL");
         }
 
         if let Some(prev_runtime_provider) = &self.prev_runtime_provider {
-            jcode::env::set_var("JCODE_RUNTIME_PROVIDER", prev_runtime_provider);
+            mona::env::set_var("MONA_RUNTIME_PROVIDER", prev_runtime_provider);
         } else {
-            jcode::env::remove_var("JCODE_RUNTIME_PROVIDER");
+            mona::env::remove_var("MONA_RUNTIME_PROVIDER");
         }
 
         if let Some(prev_active_provider) = &self.prev_active_provider {
-            jcode::env::set_var("JCODE_ACTIVE_PROVIDER", prev_active_provider);
+            mona::env::set_var("MONA_ACTIVE_PROVIDER", prev_active_provider);
         } else {
-            jcode::env::remove_var("JCODE_ACTIVE_PROVIDER");
+            mona::env::remove_var("MONA_ACTIVE_PROVIDER");
         }
 
         if let Some(prev_openrouter_cache_namespace) = &self.prev_openrouter_cache_namespace {
-            jcode::env::set_var(
-                "JCODE_OPENROUTER_CACHE_NAMESPACE",
+            mona::env::set_var(
+                "MONA_OPENROUTER_CACHE_NAMESPACE",
                 prev_openrouter_cache_namespace,
             );
         } else {
-            jcode::env::remove_var("JCODE_OPENROUTER_CACHE_NAMESPACE");
+            mona::env::remove_var("MONA_OPENROUTER_CACHE_NAMESPACE");
         }
     }
 }
@@ -170,7 +170,7 @@ pub(crate) struct EnvVarGuard {
 impl EnvVarGuard {
     pub(crate) fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let prev = std::env::var_os(name);
-        jcode::env::set_var(name, value);
+        mona::env::set_var(name, value);
         Self { name, prev }
     }
 }
@@ -178,9 +178,9 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         if let Some(prev) = &self.prev {
-            jcode::env::set_var(self.name, prev);
+            mona::env::set_var(self.name, prev);
         } else {
-            jcode::env::remove_var(self.name);
+            mona::env::remove_var(self.name);
         }
     }
 }
@@ -250,14 +250,14 @@ pub(crate) async fn wait_for_tcp_port(port: u16) -> Result<()> {
 }
 
 fn pair_test_device(token: &str) -> Result<()> {
-    let mut registry = jcode::gateway::DeviceRegistry::load();
+    let mut registry = mona::gateway::DeviceRegistry::load();
     let now = chrono::Utc::now().to_rfc3339();
     let mut hasher = sha2::Sha256::new();
     use sha2::Digest;
     hasher.update(token.as_bytes());
     let token_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
     registry.devices.retain(|d| d.id != "test-device-ws");
-    registry.devices.push(jcode::gateway::PairedDevice {
+    registry.devices.push(mona::gateway::PairedDevice {
         id: "test-device-ws".to_string(),
         name: "WS Test Device".to_string(),
         token_hash,
@@ -544,7 +544,7 @@ pub(crate) struct TransportScenarioResult {
 
 pub(crate) async fn run_unix_transport_scenario() -> Result<TransportScenarioResult> {
     let runtime_dir = short_runtime_dir(format!(
-        "jcode-ws-e2e-unix-{}",
+        "mona-ws-e2e-unix-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -552,7 +552,7 @@ pub(crate) async fn run_unix_transport_scenario() -> Result<TransportScenarioRes
     ));
     std::fs::create_dir_all(&runtime_dir)?;
     let socket_path = runtime_dir.join("jcode.sock");
-    let debug_socket_path = runtime_dir.join("jcode-debug.sock");
+    let debug_socket_path = runtime_dir.join("mona-debug.sock");
 
     let provider = MockProvider::new();
     provider.queue_response(vec![
@@ -566,7 +566,7 @@ pub(crate) async fn run_unix_transport_scenario() -> Result<TransportScenarioRes
         StreamEvent::SessionId("provider-session-1".to_string()),
     ]);
 
-    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let provider: Arc<dyn mona::provider::Provider> = Arc::new(provider);
     let server_instance =
         server::Server::new_with_paths(provider, socket_path.clone(), debug_socket_path.clone());
     let server_handle = tokio::spawn(async move { server_instance.run().await });
@@ -611,7 +611,7 @@ pub(crate) async fn run_unix_transport_scenario() -> Result<TransportScenarioRes
                 let state = debug_run_command(debug_socket_path.clone(), "state", None)
                     .await
                     .unwrap_or_else(|e| format!("<state error: {e}>"));
-                let logs = std::env::var_os("JCODE_HOME")
+                let logs = std::env::var_os("MONA_HOME")
                     .and_then(|home| latest_log_excerpt(std::path::Path::new(&home)));
                 let seen = message_events
                     .iter()
@@ -661,7 +661,7 @@ pub(crate) async fn run_unix_transport_scenario() -> Result<TransportScenarioRes
 
 pub(crate) async fn run_websocket_transport_scenario() -> Result<TransportScenarioResult> {
     let runtime_dir = short_runtime_dir(format!(
-        "jcode-ws-e2e-websocket-{}",
+        "mona-ws-e2e-websocket-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -669,7 +669,7 @@ pub(crate) async fn run_websocket_transport_scenario() -> Result<TransportScenar
     ));
     std::fs::create_dir_all(&runtime_dir)?;
     let socket_path = runtime_dir.join("jcode.sock");
-    let debug_socket_path = runtime_dir.join("jcode-debug.sock");
+    let debug_socket_path = runtime_dir.join("mona-debug.sock");
     let gateway_port = reserve_tcp_port()?;
     let ws_token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     pair_test_device(ws_token)?;
@@ -686,10 +686,10 @@ pub(crate) async fn run_websocket_transport_scenario() -> Result<TransportScenar
         StreamEvent::SessionId("provider-session-1".to_string()),
     ]);
 
-    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let provider: Arc<dyn mona::provider::Provider> = Arc::new(provider);
     let server_instance =
         server::Server::new_with_paths(provider, socket_path.clone(), debug_socket_path.clone())
-            .with_gateway_config(jcode::gateway::GatewayConfig {
+            .with_gateway_config(mona::gateway::GatewayConfig {
                 port: gateway_port,
                 bind_addr: "127.0.0.1".to_string(),
                 enabled: true,
@@ -1166,7 +1166,7 @@ pub(crate) async fn wait_for_selfdev_reload_cycle(
     let mut stable_since: Option<Instant> = None;
 
     while Instant::now() < deadline {
-        let marker_active = jcode::server::reload_marker_active(Duration::from_secs(30));
+        let marker_active = mona::server::reload_marker_active(Duration::from_secs(30));
         let server_info = match tokio::time::timeout(
             Duration::from_millis(750),
             debug_run_command(debug_socket_path.to_path_buf(), "server:info", None),

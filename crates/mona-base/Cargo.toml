@@ -1,0 +1,162 @@
+[package]
+name = "mona-base"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Foundational layer of the jcode application core: the downward-closed set of
+# modules (provider, auth, config, session, message, memory, telemetry, ...)
+# that the server/tool/agent layer depends on. Split out of `mona-app-core` so
+# the two halves compile as separate rustc units, halving peak compile memory.
+# `mona-app-core` re-exports this crate (`pub use mona_base::*`) so that every
+# existing `crate::<module>` path keeps resolving unchanged.
+
+[lib]
+name = "mona_base"
+path = "src/lib.rs"
+
+[dependencies]
+# Memory allocator (reduces fragmentation for long-running server)
+tikv-jemalloc-ctl = { version = "0.6", optional = true }
+tikv-jemalloc-sys = { version = "0.6", optional = true }
+
+# Async runtime
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "blocking", "charset", "http2", "system-proxy", "rustls-tls", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+serde_yaml = "0.9"
+toml = "0.8"
+
+# File operations
+
+# Utilities
+dirs = "5"               # home directory
+anyhow = "1"
+libc = "0.2"             # Unix system calls (flock)
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+urlencoding = "2"        # URL encoding for web search
+uuid = { version = "1", features = ["v4", "v5"] }
+proctitle = "0.1"
+
+# Embeddings (local inference) - behind feature flag (163 crates, slow to compile)
+mona-embedding = { path = "../mona-embedding", optional = true }
+mona-gateway-types = { path = "../mona-gateway-types" }
+mona-import-core = { path = "../mona-import-core" }
+mona-logging = { path = "../mona-logging" }
+
+# OAuth
+base64 = "0.22"
+sha2 = "0.10"
+mona-transport = { path = "../mona-transport" }
+rand = "0.9.3"
+hex = "0.4"
+url = "2"
+open = "5"               # Open URLs in browser
+mona-auth-types = { path = "../mona-auth-types" }
+mona-azure-auth = { path = "../mona-azure-auth" }
+mona-agent-runtime = { path = "../mona-agent-runtime" }
+mona-provider-metadata = { path = "../mona-provider-metadata" }
+mona-provider-env = { path = "../mona-provider-env" }
+mona-provider-core = { path = "../mona-provider-core" }
+# default-features=false so this crate's `bedrock` feature (below) controls the
+# AWS SDK stack; the pure model-metadata/credential-detection layer is always on.
+mona-provider-bedrock = { path = "../mona-provider-bedrock", default-features = false }
+mona-provider-antigravity = { path = "../mona-provider-antigravity" }
+mona-provider-copilot = { path = "../mona-provider-copilot" }
+mona-provider-openai = { path = "../mona-provider-openai" }
+mona-provider-openrouter = { path = "../mona-provider-openrouter" }
+mona-provider-gemini = { path = "../mona-provider-gemini" }
+# NOTE: this foundation layer intentionally does NOT depend on any `mona-tui-*`
+# crate. The two pure-data/string symbols it used to reach for (`ResumeTarget`,
+# `reasoning_line_markup`) were moved to `mona-session-types` and
+# `mona-render-core` respectively, so the layering inversion (foundation
+# depending on presentation) is gone.
+mona-render-core = { path = "../mona-render-core" }
+mona-terminal-launch = { path = "../mona-terminal-launch" }
+mona-terminal-image = { path = "../mona-terminal-image" }
+mona-telemetry-core = { path = "../mona-telemetry-core" }
+mona-usage-types = { path = "../mona-usage-types" }
+
+# Native microphone input is opt-in so CLI builds need no audio development libraries.
+cpal = { version = "0.15", optional = true }
+
+# Streaming
+
+# Terminal I/O (event stream for interactive auth/secret prompts). NOTE: the
+# heavier presentation deps (ratatui widgets, arboard clipboard) were dropped
+# from this foundation layer; they are unused here and live only in `mona-tui`.
+crossterm = { version = "0.29", features = ["event-stream"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }  # Only PNG/JPEG (skip avif/rav1e, exr, gif, tiff, etc)
+
+# NOTE: PDF text extraction (mona-pdf) lives in the upper mona-app-core crate
+# (tool/read.rs), not here.
+mona-background-types = { path = "../mona-background-types" }
+mona-batch-types = { path = "../mona-batch-types" }
+mona-build-meta = { path = "../mona-build-meta" }
+mona-compaction-core = { path = "../mona-compaction-core" }
+mona-config-types = { path = "../mona-config-types" }
+mona-core = { path = "../mona-core" }
+mona-memory-types = { path = "../mona-memory-types" }
+mona-message-types = { path = "../mona-message-types" }
+mona-plan = { path = "../mona-plan" }
+mona-protocol = { path = "../mona-protocol" }
+mona-session-types = { path = "../mona-session-types" }
+mona-selfdev-types = { path = "../mona-selfdev-types" }
+mona-storage = { path = "../mona-storage" }
+mona-task-types = { path = "../mona-task-types" }
+mona-tool-core = { path = "../mona-tool-core" }
+mona-tool-types = { path = "../mona-tool-types" }
+mona-side-panel-types = { path = "../mona-side-panel-types" }
+
+# Gzip decoding (used by provider import/helpers)
+tempfile = "3"
+qrcode = { version = "0.14.1", default-features = false }
+
+[features]
+default = ["bedrock"]
+# Compiles the in-crate test helpers (storage::lock_test_env,
+# auth::test_sandbox, bus::reset_models_updated_publish_state_for_tests, ...) as
+# `pub` so downstream crates' test targets can reach them. Enabled as a
+# dev-dependency feature by mona-app-core / jcode / etc.; never in normal
+# (non-test) builds.
+test-support = []
+voice-capture = ["dep:cpal"]
+jemalloc = [
+    "dep:tikv-jemalloc-ctl",
+    "dep:tikv-jemalloc-sys",
+    "tikv-jemalloc-ctl/stats",
+]
+jemalloc-prof = [
+    "jemalloc",
+    "tikv-jemalloc-ctl/profiling",
+]
+embeddings = ["dep:mona-embedding"]
+# Live AWS Bedrock support (the ~20-crate AWS SDK stack) lives in
+# mona-provider-bedrock (aws-sdk); forward there. Without it the Bedrock
+# provider still compiles but live calls return an explanatory error.
+bedrock = ["mona-provider-bedrock/aws-sdk"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_Threading"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.7"
+
+[dev-dependencies]
+# Dev-only cycle (cargo permits dev-dependencies on dependents): base's
+# MultiProvider routing tests exercise the real OpenRouter/OpenAI-compatible
+# runtime through the composition-root registry, exactly like the binary.
+mona-provider-openrouter-runtime = { path = "../mona-provider-openrouter-runtime" }
+# Paused-time (auto-advancing virtual clock) tests for the background stall watchdog.
+tokio = { version = "1", features = ["test-util"] }

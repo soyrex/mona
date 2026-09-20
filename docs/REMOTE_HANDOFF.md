@@ -35,7 +35,7 @@ Most of the value is in attach. Migration is the hard, rarer one.
 | Unix socket protocol | `server/socket.rs`, `client_api.rs` | Line-delimited JSON `Request`/`ServerEvent`. Transport-agnostic in shape, not in code. |
 | Reload handoff | `server/reload.rs`, `restart_snapshot.rs` | Already serializes live server state across a process swap. This is migration, minus the network. |
 | Relay | `server/jade_relay.rs` | Long-poll bridge to a remote control plane; the phone/web path. |
-| Harness API | `jcode-harness-api{,-server}` | A second, more structured client surface. |
+| Harness API | `mona-harness-api{,-server}` | A second, more structured client surface. |
 
 The important observation: **reload already solves the state-transfer half of
 migration**, and **takeover already solves the ownership half of attach**. Remote

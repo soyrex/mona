@@ -48,7 +48,7 @@ python scripts/test_mock_sponsor_service.py
 ```
 
 The suite invokes the public CLI in subprocesses and crosses the HTTP boundary.
-It verifies that `--via jcode-discovery` survives confirmation, the acquisition
+It verifies that `--via mona-discovery` survives confirmation, the acquisition
 source is immutable, an omitted flag stays unattributed, tampered and expired
 state is rejected, and a magic link cannot be reused. This reference proves the
 proposed contract is implementable. Sponsor production acceptance still
@@ -60,6 +60,6 @@ reported as `attributed`.
 The end-to-end suite also fetches the select response, extracts the exact setup
 command Jcode would hand to an agent, executes that command through the public
 CLI, confirms its magic link, and observes `acquisition_source =
-jcode-discovery` through the public account API. This prevents the catalog and
+mona-discovery` through the public account API. This prevents the catalog and
 sponsor-flow tests from passing independently while disagreeing at their shared
 command boundary.

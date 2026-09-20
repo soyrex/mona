@@ -2,7 +2,7 @@
 """Live benchmark for proactive sponsored Discovery triggering.
 
 The runner starts an isolated Jcode server marked with
-JCODE_DISCOVERY_BENCHMARK=1, verifies that every live catalog listing has a
+MONA_DISCOVERY_BENCHMARK=1, verifies that every live catalog listing has a
 natural-language positive benchmark case, then evaluates both expected listing
 hits and no-Discovery controls.
 
@@ -32,9 +32,9 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = REPO_ROOT / "scripts" / "discovery_benchmark_cases.json"
 DEFAULT_OUTPUT = REPO_ROOT / "target" / "discovery-benchmark" / "latest.json"
-CATEGORY_SOURCE = REPO_ROOT / "crates" / "jcode-base" / "src" / "sponsors.rs"
-BENCHMARK_ENV = "JCODE_DISCOVERY_BENCHMARK"
-BENCHMARK_HEADER = "x-jcode-discovery-benchmark"
+CATEGORY_SOURCE = REPO_ROOT / "crates" / "mona-base" / "src" / "sponsors.rs"
+BENCHMARK_ENV = "MONA_DISCOVERY_BENCHMARK"
+BENCHMARK_HEADER = "x-mona-discovery-benchmark"
 # Accept both the current and legacy tool name when scanning transcripts.
 DISCOVERY_TOOL_NAMES = ("integration_tools", "discover_tools")
 # The tool was renamed from `discover_tools` to `integration_tools`, and its
@@ -102,9 +102,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=90.0, help="Seconds allowed per model attempt.")
     parser.add_argument("--catalog-retries", type=int, default=4)
     parser.add_argument("--retry-delay", type=float, default=0.5)
-    parser.add_argument("--jcode", default=os.environ.get("JCODE_BIN", "jcode"))
-    parser.add_argument("--model", default=os.environ.get("JCODE_DISCOVERY_BENCHMARK_MODEL", "gpt-5.6-sol"))
-    parser.add_argument("--provider", default=os.environ.get("JCODE_DISCOVERY_BENCHMARK_PROVIDER"))
+    parser.add_argument("--jcode", default=os.environ.get("MONA_BIN", "mona"))
+    parser.add_argument("--model", default=os.environ.get("MONA_DISCOVERY_BENCHMARK_MODEL", "gpt-5.6-sol"))
+    parser.add_argument("--provider", default=os.environ.get("MONA_DISCOVERY_BENCHMARK_PROVIDER"))
     parser.add_argument(
         "--discovery-only",
         action="store_true",
@@ -340,7 +340,7 @@ def benchmark_environment(socket_path: Path) -> dict[str, str]:
     return {
         **os.environ,
         BENCHMARK_ENV: "1",
-        "JCODE_RUNTIME_DIR": str(socket_path.parent),
+        "MONA_RUNTIME_DIR": str(socket_path.parent),
     }
 
 
@@ -544,7 +544,7 @@ def run_attempt(args: argparse.Namespace, case: BenchmarkCase, attempt: int, soc
 
 def progress(current: int, total: int, unit: str, message: str) -> None:
     print(
-        "JCODE_PROGRESS "
+        "MONA_PROGRESS "
         + json.dumps(
             {
                 "current": current,
@@ -757,7 +757,7 @@ def main() -> int:
                 f"missing cases={coverage['missing_cases']}, stale cases={coverage['stale_cases']}"
             )
     else:
-        with tempfile.TemporaryDirectory(prefix="jcode-discovery-benchmark-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="mona-discovery-benchmark-") as temp_dir:
             temporary_root = Path(temp_dir)
             socket_path = temporary_root / "jcode.sock"
             workdir = temporary_root / "workspace"

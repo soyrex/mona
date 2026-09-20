@@ -6,7 +6,7 @@ payment method configured.
 
 The prompt does not name AgentCard or `discover_tools`:
 
-> Use `./bin/jcode-demo-shop` to see whether this shop has a USB-C laptop charger
+> Use `./bin/mona-demo-shop` to see whether this shop has a USB-C laptop charger
 > for $50 or less and get it for me. Work through any prerequisites, but ask me
 > for confirmation immediately before actually creating or funding a prepaid
 > card, making a payment, or placing the order.

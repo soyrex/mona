@@ -292,7 +292,7 @@ provider = "twilio"
 
 # Webhook (if enabled)
 [safety.notifications.webhook]
-url = "https://example.com/jcode-safety"
+url = "https://example.com/mona-safety"
 secret = "..."
 
 # Desktop notification (uses notify-send or similar)
@@ -364,7 +364,7 @@ Ambient cycle completed (4m 56s)
 Done:
 - Merged 2 duplicate memories (dark mode preference)
 - Pruned 1 stale memory (confidence: 0.02)
-- Extracted 3 memories from crashed session jcode-red-fox-1234
+- Extracted 3 memories from crashed session mona-red-fox-1234
 - Verified 5 facts against codebase (all still valid)
 
 Needs your review:
@@ -377,7 +377,7 @@ Budget: 62% remaining today
 
 ### Delivery
 
-- **Always:** Written to `~/.jcode/ambient/transcripts/YYYY-MM-DD-HHMMSS.json`
+- **Always:** Written to `~/.mona/ambient/transcripts/YYYY-MM-DD-HHMMSS.json`
 - **If email enabled:** Summary sent after each cycle (respecting batch interval)
 - **If TUI open:** Summary shown in ambient info widget
 - **CLI:** `jcode ambient log` to view recent transcripts
@@ -389,7 +389,7 @@ Budget: 62% remaining today
 ### Storage
 
 ```
-~/.jcode/safety/
+~/.mona/safety/
 ├── queue.json              # Pending permission requests
 ├── history.json            # Past decisions (for learning patterns)
 └── config.json             # Cached safety configuration

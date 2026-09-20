@@ -11,7 +11,7 @@ Jcode already:
 - forwards `HERDR_ENV`, `HERDR_SOCKET_PATH`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, `HERDR_BIN_PATH`, `HERDR_SESSION`, and `HERDR_AGENT` from the requesting client to server-side spawn and focus paths;
 - recognizes Herdr as a masking terminal multiplexer for Mermaid graphics capability detection;
 - exports stable lifecycle observer hooks for `session_start`, `session_end`, `turn_start`, and `turn_end`;
-- exports `JCODE_HOOK_SESSION_ID`, `JCODE_HOOK_CWD`, event fields, and a JSON `JCODE_HOOK_PAYLOAD`;
+- exports `MONA_HOOK_SESSION_ID`, `MONA_HOOK_CWD`, event fields, and a JSON `MONA_HOOK_PAYLOAD`;
 - resumes a native session with `jcode --resume <session-id>`.
 
 ## Recommended first Herdr integration
@@ -27,9 +27,9 @@ On Jcode `session_start`, the Herdr hook should send one newline-delimited JSON 
   "params": {
     "pane_id": "<HERDR_PANE_ID>",
     "source": "herdr:jcode",
-    "agent": "jcode",
+    "agent": "mona",
     "seq": 1,
-    "agent_session_id": "<JCODE_HOOK_SESSION_ID>",
+    "agent_session_id": "<MONA_HOOK_SESSION_ID>",
     "session_start_source": "startup"
   }
 }
@@ -54,7 +54,7 @@ A first-class integration cannot be shipped only as a remote detection manifest.
 
 1. Add `jcode` to `IntegrationTarget`, CLI parsing, labels, command discovery, recommendations, status, install, and uninstall handling.
 2. Install a config-safe Jcode session hook adapter without overwriting an existing user hook. If Herdr cannot safely compose the single Jcode hook command, coordinate a small multi-hook or native-emitter addition in Jcode first.
-3. Accept `("herdr:jcode", "jcode")` as an official session source.
+3. Accept `("herdr:jcode", "mona")` as an official session source.
 4. Persist its ID session reference and map it to `jcode --resume <id>` during restore.
 5. Add Jcode process detection and a bundled screen manifest for idle, working, and blocked UI states.
 6. Keep screen-manifest detection authoritative until Jcode exposes complete blocked, approval-result, interrupt, and exit transitions.

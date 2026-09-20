@@ -32,7 +32,7 @@ pub async fn run_debug_command(
         eprintln!("Debug socket not found at {:?}", debug_socket);
         eprintln!("\nMake sure:");
         eprintln!("  1. A jcode server is running (jcode or jcode serve)");
-        eprintln!("  2. debug_socket is enabled in ~/.jcode/config.toml");
+        eprintln!("  2. debug_socket is enabled in ~/.mona/config.toml");
         eprintln!("     [display]");
         eprintln!("     debug_socket = true");
         eprintln!("\nOr use 'jcode debug start' to start a server.");
@@ -118,7 +118,7 @@ async fn debug_list_servers() -> Result<()> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                    && name.starts_with("jcode")
+                    && name.starts_with("mona")
                     && name.ends_with(".sock")
                     && !name.contains("-debug")
                 {
@@ -285,7 +285,7 @@ async fn debug_start_server(arg: &str, socket_path: Option<String>) -> Result<()
     if crate::transport::is_socket_path(&debug_socket) {
         eprintln!("✓ Debug socket at {}", debug_socket.display());
     } else {
-        eprintln!("⚠ Debug socket not enabled. Add to ~/.jcode/config.toml:");
+        eprintln!("⚠ Debug socket not enabled. Add to ~/.mona/config.toml:");
         eprintln!("  [display]");
         eprintln!("  debug_socket = true");
     }

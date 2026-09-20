@@ -93,24 +93,24 @@ def measure(client: Client, cmd_path: Path, resp_path: Path,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--binary",
-                    default=str(REPO_ROOT / "target" / "selfdev" / "jcode"))
+                    default=str(REPO_ROOT / "target" / "selfdev" / "mona"))
     ap.add_argument("--window-s", type=float, default=3.0)
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     binary = str(Path(args.binary).resolve())
-    scratch = Path(os.environ.get("JCODE_SCRATCH_DIR") or tempfile.gettempdir())
-    root = Path(tempfile.mkdtemp(prefix="jcode-probe-", dir=str(scratch)))
+    scratch = Path(os.environ.get("MONA_SCRATCH_DIR") or tempfile.gettempdir())
+    root = Path(tempfile.mkdtemp(prefix="mona-probe-", dir=str(scratch)))
     home, run = root / "home", root / "run"
     home.mkdir(parents=True)
     run.mkdir(parents=True)
 
     env = os.environ.copy()
     env.update({
-        "JCODE_HOME": str(home), "JCODE_RUNTIME_DIR": str(run),
-        "JCODE_SOCKET": str(run / "jcode.sock"), "JCODE_NO_TELEMETRY": "1",
-        "JCODE_DEBUG_CONTROL": "1", "JCODE_TEMP_SERVER": "1",
-        "JCODE_SERVER_OWNER_PID": str(os.getpid()), "JCODE_PERF_TIER": "full",
+        "MONA_HOME": str(home), "MONA_RUNTIME_DIR": str(run),
+        "MONA_SOCKET": str(run / "jcode.sock"), "MONA_NO_TELEMETRY": "1",
+        "MONA_DEBUG_CONTROL": "1", "MONA_TEMP_SERVER": "1",
+        "MONA_SERVER_OWNER_PID": str(os.getpid()), "MONA_PERF_TIER": "full",
     })
     env.setdefault("ANTHROPIC_API_KEY", "sk-ant-probe")
     # Pin the theme so the client never issues an OSC 11 background query.
@@ -118,20 +118,20 @@ def main() -> int:
     # answers it races the client and the leftover bytes get decoded as
     # composer keystrokes (observed as `]11;rgb:...` text in the input line),
     # which silently invalidates every measurement taken afterwards.
-    env["JCODE_THEME"] = "dark"
-    debug_sock = run / "jcode-debug.sock"
+    env["MONA_THEME"] = "dark"
+    debug_sock = run / "mona-debug.sock"
     cmd_path, resp_path = run / "client_cmd", run / "client_resp"
 
     log_fh = (root / "server.log").open("wb")
     server = subprocess.Popen(
-        [binary, "serve", "--socket", env["JCODE_SOCKET"], "--debug-socket",
+        [binary, "serve", "--socket", env["MONA_SOCKET"], "--debug-socket",
          "--no-update", "--no-selfdev"],
         env=env, stdout=log_fh, stderr=subprocess.STDOUT, preexec_fn=os.setsid)
 
     client: Client | None = None
     out: dict = {"binary": binary, "states": []}
     try:
-        wait_for_socket(Path(env["JCODE_SOCKET"]))
+        wait_for_socket(Path(env["MONA_SOCKET"]))
         wait_for_socket(debug_sock)
         sid = dbg(debug_sock, f"create_session:{REPO_ROOT}").strip()
         if sid.startswith("{"):

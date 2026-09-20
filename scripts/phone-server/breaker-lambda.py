@@ -11,6 +11,6 @@ def handler(event, context):
     else:
         msg = f"Circuit breaker: {INSTANCE_ID} already {state}"
     sns = boto3.client("sns", region_name="us-east-1")
-    sns.publish(TopicArn="arn:aws:sns:us-east-1:302154194530:jcode-guard-warn",
+    sns.publish(TopicArn="arn:aws:sns:us-east-1:302154194530:mona-guard-warn",
                 Subject="jcode circuit breaker fired", Message=msg)
     return {"message": msg}

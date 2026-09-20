@@ -22,7 +22,7 @@ prefers the Jcode subscription credential, verifies the live `/v1/me`
 This requires the gateway browser rollout and its upstream service configuration.
 A saved login alone is not proof of entitlement or deployed support.
 
-`JCODE_BROWSER_JEV_PROVIDER` can explicitly select `jcode`, `openrouter`,
+`MONA_BROWSER_JEV_PROVIDER` can explicitly select `jcode`, `openrouter`,
 `typesafe`, or `aimlapi`. Its default is `auto`: Jcode, then OpenRouter, TypeSafe,
 and AI/ML API, choosing the first configured credential. This setting is separate
 from memory's Jev provider. An entitlement, billing, or network error never
@@ -123,19 +123,19 @@ process environment, without putting its value in shell history or logs.
 ```bash
 cargo build --profile selfdev
 BIN="$PWD/target/selfdev/jcode"
-REAL_JCODE_HOME="${JCODE_HOME:-$HOME/.jcode}"
-export JCODE_HOME="$(mktemp -d "$JCODE_SCRATCH_DIR/browser-fast-home.XXXXXX")"
-export JCODE_RUNTIME_DIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/jbf.XXXXXX")"
-SOCK="$JCODE_RUNTIME_DIR/jcode-browser-fast.sock"
-cp -a "$REAL_JCODE_HOME/browser" "$JCODE_HOME/browser"
+REAL_MONA_HOME="${MONA_HOME:-$HOME/.jcode}"
+export MONA_HOME="$(mktemp -d "$MONA_SCRATCH_DIR/browser-fast-home.XXXXXX")"
+export MONA_RUNTIME_DIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/jbf.XXXXXX")"
+SOCK="$MONA_RUNTIME_DIR/mona-browser-fast.sock"
+cp -a "$REAL_MONA_HOME/browser" "$MONA_HOME/browser"
 : "${OPENROUTER_API_KEY:?Provide OpenRouter credentials through the process environment}"
 : "${BROWSER_SESSION:?Use the existing dedicated fixture browser session}"
-: "${JCODE_BROWSER_HANDOFF_TEST_TAB_ID:?Use a disposable local fixture tab}"
+: "${MONA_BROWSER_HANDOFF_TEST_TAB_ID:?Use a disposable local fixture tab}"
 
 # Enable debug control only for this disposable acceptance daemon.
-JCODE_DEBUG_CONTROL=1 "$BIN" --no-update --provider openrouter --socket "$SOCK" serve \
+MONA_DEBUG_CONTROL=1 "$BIN" --no-update --provider openrouter --socket "$SOCK" serve \
   --temporary-server --owner-pid "$$" --temp-idle-timeout-secs 300 \
-  >"$JCODE_HOME/acceptance-server.log" 2>&1 &
+  >"$MONA_HOME/acceptance-server.log" 2>&1 &
 SERVER_PID=$!
 # Wait for this private debug listener, never fall back to the shared socket.
 for attempt in $(seq 1 100); do
@@ -149,7 +149,7 @@ SID=$("$BIN" debug --socket "$SOCK" create_session "$PWD" |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')
 
 PAYLOAD=$(python3 -c 'import json,os; print(json.dumps({
-  "action":"handoff", "tab_id":int(os.environ["JCODE_BROWSER_HANDOFF_TEST_TAB_ID"]),
+  "action":"handoff", "tab_id":int(os.environ["MONA_BROWSER_HANDOFF_TEST_TAB_ID"]),
   "frame_id":0, "max_steps":8,
   "goal":"Open Documentation, then Browser controls. Finish only when Fast browser integration verified is visible. Stay on the local fixture website."
 }))')
@@ -168,7 +168,7 @@ reload, or promotion commands to clean up an acceptance daemon.
 To verify subscription access without accidentally measuring BYOK:
 
 ```bash
-JCODE_BROWSER_JEV_PROVIDER=jcode cargo test -p jcode-app-core \
+MONA_BROWSER_JEV_PROVIDER=jcode cargo test -p mona-app-core \
   live_subscription_jev_decision_smoke -- --ignored --nocapture
 ```
 
@@ -205,13 +205,13 @@ They do not create, select, focus, or close a tab/window themselves.
 
 ```bash
 # Start page -> Documentation -> Browser controls -> visible verification text.
-JCODE_BROWSER_HANDOFF_TEST_TAB_ID=<dedicated-tab-id> \
-  cargo test -p jcode-app-core live_browser_handoff_completes_local_navigation \
+MONA_BROWSER_HANDOFF_TEST_TAB_ID=<dedicated-tab-id> \
+  cargo test -p mona-app-core live_browser_handoff_completes_local_navigation \
   -- --ignored --nocapture
 
 # A separate dedicated local page with a visible OTP/password control.
-JCODE_BROWSER_HANDOFF_TEST_BLOCKED_TAB_ID=<dedicated-blocked-tab-id> \
-  cargo test -p jcode-app-core live_browser_handoff_sensitive_fixture_hands_back_without_actions \
+MONA_BROWSER_HANDOFF_TEST_BLOCKED_TAB_ID=<dedicated-blocked-tab-id> \
+  cargo test -p mona-app-core live_browser_handoff_sensitive_fixture_hands_back_without_actions \
   -- --ignored --nocapture
 ```
 

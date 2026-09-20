@@ -17,7 +17,7 @@ import sys
 import os
 import requests
 
-DEBUG_SOCKET = f"/run/user/{os.getuid()}/jcode-debug.sock"
+DEBUG_SOCKET = f"/run/user/{os.getuid()}/mona-debug.sock"
 MAIN_SOCKET = f"/run/user/{os.getuid()}/jcode.sock"
 TEST_PROMPT = "What is 2+2? Reply with just the number."
 CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -129,7 +129,7 @@ def send_debug_cmd(sock, cmd: str, session_id: str = None, timeout: float = 60) 
     return resp.get('ok', False), resp.get('output', ''), resp.get('error', '')
 
 
-def run_jcode_oauth(prompt: str) -> dict:
+def run_mona_oauth(prompt: str) -> dict:
     """Run via jcode debug socket using direct OAuth."""
     print(f"\n{'='*60}")
     print("Testing jcode direct OAuth API...")
@@ -231,14 +231,14 @@ def main():
     print(f"\nQuota after Claude CLI: {five_hour_after_cli:.2f}% (delta: +{cli_quota_delta:.4f}%)")
 
     # Test jcode OAuth
-    jcode_result = run_jcode_oauth(TEST_PROMPT)
+    mona_result = run_mona_oauth(TEST_PROMPT)
 
     # Check quota after jcode test
     time.sleep(1)  # Wait for API to update
     usage_after_jcode = get_oauth_usage()
     five_hour_after_jcode = usage_after_jcode.get('five_hour', {}).get('utilization', 0)
-    jcode_quota_delta = five_hour_after_jcode - five_hour_after_cli
-    print(f"\nQuota after jcode: {five_hour_after_jcode:.2f}% (delta: +{jcode_quota_delta:.4f}%)")
+    mona_quota_delta = five_hour_after_jcode - five_hour_after_cli
+    print(f"\nQuota after jcode: {five_hour_after_jcode:.2f}% (delta: +{mona_quota_delta:.4f}%)")
 
     # Summary
     print(f"\n{'='*60}")
@@ -260,11 +260,11 @@ def main():
             print(f"  Cost: ${cost:.6f}")
 
     print("\njcode Direct OAuth:")
-    if "error" in jcode_result:
-        print(f"  Error: {jcode_result['error']}")
+    if "error" in mona_result:
+        print(f"  Error: {mona_result['error']}")
     else:
-        print(f"  Time: {jcode_result.get('time', 'N/A'):.2f}s")
-        usage = jcode_result.get('usage', {})
+        print(f"  Time: {mona_result.get('time', 'N/A'):.2f}s")
+        usage = mona_result.get('usage', {})
         if usage:
             print(f"  Input tokens: {usage.get('input_tokens', 'N/A')}")
             print(f"  Output tokens: {usage.get('output_tokens', 'N/A')}")
@@ -278,36 +278,36 @@ def main():
 
     # Calculate totals for comparison
     cli_usage = cli_result.get('usage', {})
-    jcode_usage = jcode_result.get('usage', {})
+    mona_usage = mona_result.get('usage', {})
 
     cli_total = (cli_usage.get('input_tokens', 0) or 0) + \
                 (cli_usage.get('cache_creation_input_tokens', 0) or 0) + \
                 (cli_usage.get('cache_read_input_tokens', 0) or 0) + \
                 (cli_usage.get('output_tokens', 0) or 0)
 
-    jcode_total = (jcode_usage.get('input_tokens', 0) or 0) + \
-                  (jcode_usage.get('cache_creation_input_tokens', 0) or 0) + \
-                  (jcode_usage.get('cache_read_input_tokens', 0) or 0) + \
-                  (jcode_usage.get('output_tokens', 0) or 0)
+    mona_total = (mona_usage.get('input_tokens', 0) or 0) + \
+                  (mona_usage.get('cache_creation_input_tokens', 0) or 0) + \
+                  (mona_usage.get('cache_read_input_tokens', 0) or 0) + \
+                  (mona_usage.get('output_tokens', 0) or 0)
 
     cli_time = cli_result.get('time', 0)
-    jcode_time = jcode_result.get('time', 0)
-    speedup = cli_time / jcode_time if jcode_time > 0 else 0
-    token_savings = 100 * (1 - jcode_total / cli_total) if cli_total > 0 else 0
+    mona_time = mona_result.get('time', 0)
+    speedup = cli_time / mona_time if mona_time > 0 else 0
+    token_savings = 100 * (1 - mona_total / cli_total) if cli_total > 0 else 0
 
     print(f"""
 Both methods use the same OAuth token from ~/.claude/.credentials.json.
 
 PERFORMANCE COMPARISON:
                     Claude CLI      jcode
-  Response time:    {cli_time:.2f}s           {jcode_time:.2f}s ({speedup:.1f}x faster)
-  Total tokens:     {cli_total:,}         {jcode_total:,} ({token_savings:.0f}% fewer)
+  Response time:    {cli_time:.2f}s           {mona_time:.2f}s ({speedup:.1f}x faster)
+  Total tokens:     {cli_total:,}         {mona_total:,} ({token_savings:.0f}% fewer)
   Estimated cost:   ${cli_result.get('cost', 0):.4f}         (not calculated)
 
 ACTUAL QUOTA CONSUMPTION (from OAuth API):
   Before tests:     {five_hour_before:.2f}%
   After Claude CLI: {five_hour_after_cli:.2f}%  (+{cli_quota_delta:.4f}%)
-  After jcode:      {five_hour_after_jcode:.2f}%  (+{jcode_quota_delta:.4f}%)
+  After jcode:      {five_hour_after_jcode:.2f}%  (+{mona_quota_delta:.4f}%)
 
 NOTES:
 - The quota API shows percentage of a large 5-hour window (likely millions of tokens)

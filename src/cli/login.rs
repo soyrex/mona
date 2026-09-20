@@ -12,7 +12,7 @@ use crate::provider_catalog::{
 use super::provider_init::{ProviderChoice, login_provider_for_choice, save_named_api_key};
 
 mod existing_key_notice;
-mod jcode_device;
+mod mona_device;
 mod next_step;
 mod scriptable;
 use scriptable::*;
@@ -319,7 +319,7 @@ pub async fn run_login_provider(
                 eprintln!("Imported {} existing auth source(s).", imported);
                 Ok(LoginFlowOutcome::Completed)
             }
-            LoginProviderTarget::Jcode => login_jcode_flow(options.no_browser)
+            LoginProviderTarget::Jcode => login_mona_flow(options.no_browser)
                 .await
                 .map(|_| LoginFlowOutcome::Completed),
             LoginProviderTarget::Claude => login_claude_flow(account_label, options.no_browser)
@@ -531,14 +531,14 @@ async fn notify_running_server_auth_changed_best_effort(provider: Option<&str>) 
     }
 }
 
-async fn login_jcode_flow(no_browser: bool) -> Result<()> {
+async fn login_mona_flow(no_browser: bool) -> Result<()> {
     eprintln!("Starting jcode subscription sign-in...");
-    let _ = jcode_device::login_jcode_device_flow(no_browser).await?;
+    let _ = mona_device::login_mona_device_flow(no_browser).await?;
     Ok(())
 }
 
-pub(crate) async fn run_jcode_account_login(no_browser: bool) -> Result<()> {
-    login_jcode_flow(no_browser).await
+pub(crate) async fn run_mona_account_login(no_browser: bool) -> Result<()> {
+    login_mona_flow(no_browser).await
 }
 
 fn login_openai_api_key_flow() -> Result<()> {
@@ -588,7 +588,7 @@ async fn login_claude_flow(requested_label: Option<&str>, no_browser: bool) -> R
     eprintln!(
         "Account '{}' stored at {}",
         label,
-        auth::claude::jcode_path()?.display()
+        auth::claude::mona_path()?.display()
     );
     if let Some(email) = profile_email {
         eprintln!("Profile email: {}", email);
@@ -634,7 +634,7 @@ async fn login_openai_flow(requested_label: Option<&str>, no_browser: bool) -> R
     eprintln!(
         "Successfully logged in to OpenAI! Account '{}' saved to {}",
         label,
-        crate::storage::jcode_dir()?
+        crate::storage::mona_dir()?
             .join("openai-auth.json")
             .display()
     );
@@ -838,7 +838,7 @@ fn login_openai_compatible_flow(
                     )
                 })?;
             crate::provider_catalog::save_env_value_to_env_file(
-                "JCODE_OPENAI_COMPAT_API_BASE",
+                "MONA_OPENAI_COMPAT_API_BASE",
                 crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
                 Some(&normalized),
             )?;
@@ -855,7 +855,7 @@ fn login_openai_compatible_flow(
                 anyhow::bail!("Invalid API key environment variable name: {}", api_key_env);
             }
             crate::provider_catalog::save_env_value_to_env_file(
-                "JCODE_OPENAI_COMPAT_API_KEY_NAME",
+                "MONA_OPENAI_COMPAT_API_KEY_NAME",
                 crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
                 Some(api_key_env),
             )?;
@@ -869,7 +869,7 @@ fn login_openai_compatible_flow(
         };
         if !default_model_input.is_empty() {
             crate::provider_catalog::save_env_value_to_env_file(
-                "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+                "MONA_OPENAI_COMPAT_DEFAULT_MODEL",
                 crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
                 Some(&default_model_input),
             )?;

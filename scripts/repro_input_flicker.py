@@ -295,16 +295,16 @@ def launch_client(binary: str, env: dict, session_id: str,
     master_fd, slave_fd = pty.openpty()
     fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     cenv = dict(env)
-    cenv["JCODE_DEBUG_CMD_PATH"] = str(cmd_path)
-    cenv["JCODE_DEBUG_RESPONSE_PATH"] = str(resp_path)
+    cenv["MONA_DEBUG_CMD_PATH"] = str(cmd_path)
+    cenv["MONA_DEBUG_RESPONSE_PATH"] = str(resp_path)
     cenv["TERM"] = "xterm-256color"
     # Pin the theme so the client never issues an OSC 11 background query. Under
     # this harness the reply can land in stdin and be decoded as composer input,
     # which prepends garbage to everything typed and would mask the real signal.
-    cenv.setdefault("JCODE_THEME", "dark")
+    cenv.setdefault("MONA_THEME", "dark")
     proc = subprocess.Popen(
         [binary, "--no-update", "--no-selfdev",
-         "--socket", env["JCODE_SOCKET"], "--resume", session_id],
+         "--socket", env["MONA_SOCKET"], "--resume", session_id],
         stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
         env=cenv, preexec_fn=os.setsid,
     )
@@ -464,9 +464,9 @@ def observe_keystroke(client: EmulatedClient, ch: str, expect: str,
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    default_bin = REPO_ROOT / "target" / "selfdev" / "jcode"
+    default_bin = REPO_ROOT / "target" / "selfdev" / "mona"
     if not default_bin.exists():
-        default_bin = Path.home() / ".jcode" / "builds" / "current" / "jcode"
+        default_bin = Path.home() / ".jcode" / "builds" / "current" / "mona"
     ap.add_argument("--binary", default=str(default_bin))
     ap.add_argument("--live", action="store_true",
                     help="use the user's real server/home instead of a throwaway "
@@ -488,28 +488,28 @@ def main() -> int:
         print(f"binary not found: {binary}")
         return 3
 
-    root = Path(tempfile.mkdtemp(prefix="jcode-input-flicker-"))
+    root = Path(tempfile.mkdtemp(prefix="mona-input-flicker-"))
     home, run = root / "home", root / "run"
     home.mkdir(parents=True)
     run.mkdir(parents=True)
 
     env = os.environ.copy()
     if args.live:
-        real_runtime = Path(env.get("JCODE_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
-        env["JCODE_SOCKET"] = env.get("JCODE_SOCKET") or str(real_runtime / "jcode.sock")
-        env["JCODE_DEBUG_CONTROL"] = "1"
-        debug_sock = real_runtime / "jcode-debug.sock"
+        real_runtime = Path(env.get("MONA_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+        env["MONA_SOCKET"] = env.get("MONA_SOCKET") or str(real_runtime / "jcode.sock")
+        env["MONA_DEBUG_CONTROL"] = "1"
+        debug_sock = real_runtime / "mona-debug.sock"
     else:
-        env["JCODE_HOME"] = str(home)
-        env["JCODE_RUNTIME_DIR"] = str(run)
-        env["JCODE_SOCKET"] = str(run / "jcode.sock")
-        env["JCODE_NO_TELEMETRY"] = "1"
-        env["JCODE_DEBUG_CONTROL"] = "1"
-        env["JCODE_TEMP_SERVER"] = "1"
-        env["JCODE_SERVER_OWNER_PID"] = str(os.getpid())
+        env["MONA_HOME"] = str(home)
+        env["MONA_RUNTIME_DIR"] = str(run)
+        env["MONA_SOCKET"] = str(run / "jcode.sock")
+        env["MONA_NO_TELEMETRY"] = "1"
+        env["MONA_DEBUG_CONTROL"] = "1"
+        env["MONA_TEMP_SERVER"] = "1"
+        env["MONA_SERVER_OWNER_PID"] = str(os.getpid())
         if not env.get("ANTHROPIC_API_KEY"):
             env["ANTHROPIC_API_KEY"] = "sk-ant-repro-input-flicker"
-        debug_sock = run / "jcode-debug.sock"
+        debug_sock = run / "mona-debug.sock"
     cmd_path, resp_path = run / "client_cmd", run / "client_resp"
 
     if not args.json:
@@ -521,7 +521,7 @@ def main() -> int:
     server_log = root / "server.log"
     if not args.live:
         server = subprocess.Popen(
-            [binary, "serve", "--socket", env["JCODE_SOCKET"], "--debug-socket",
+            [binary, "serve", "--socket", env["MONA_SOCKET"], "--debug-socket",
              "--no-update", "--no-selfdev"],
             env=env, stdout=server_log.open("wb"), stderr=subprocess.STDOUT,
             preexec_fn=os.setsid,
@@ -530,7 +530,7 @@ def main() -> int:
     result: dict = {"binary": binary, "runs": []}
     clients: list[EmulatedClient] = []
     try:
-        wait_for_socket(Path(env["JCODE_SOCKET"]))
+        wait_for_socket(Path(env["MONA_SOCKET"]))
         wait_for_socket(debug_sock)
 
         for run_idx in range(max(1, args.repeat)):

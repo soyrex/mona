@@ -5,13 +5,13 @@
 AgentCard's CLI signup must accept:
 
 ```text
-agent-cards-admin signup --email <email> --via jcode-discovery
+agent-cards-admin signup --email <email> --via mona-discovery
 ```
 
 The exact executable or signup subcommand may be adjusted to match the current
-AgentCard CLI, but `--via jcode-discovery` is the stable attribution contract.
+AgentCard CLI, but `--via mona-discovery` is the stable attribution contract.
 The CLI must carry the value through any magic-link or browser round trip and
-store `jcode-discovery` durably on the resulting account. Repeated signup/login
+store `mona-discovery` durably on the resulting account. Repeated signup/login
 must not overwrite an existing acquisition source.
 
 Recommended storage:
@@ -32,7 +32,7 @@ Implement Jcode referral attribution in the AgentCard admin CLI signup flow.
 
 Requirements:
 1. Accept `--via <source>` on the account-creating signup command. The Jcode
-   value is `jcode-discovery`.
+   value is `mona-discovery`.
 2. Validate it as an opaque, length-bounded string and do not use it for auth.
 3. Carry it through the entire signup flow, including magic-link or browser
    round trips, using signed expiring state.
@@ -43,7 +43,7 @@ Requirements:
 6. Add tests for flag parsing, state round-trip, first-write persistence,
    tampered/expired state, omitted flags, and no-overwrite behavior.
 7. Update CLI help and the integration guide with this exact example:
-   `agent-cards-admin signup --email <email> --via jcode-discovery`.
+   `agent-cards-admin signup --email <email> --via mona-discovery`.
 8. Run the repository's normal format, lint, typecheck, and test gates. Report
    changed files, test evidence, and the exact production command afterward.
 ```
@@ -54,7 +54,7 @@ Jcode must serve the final production signup command directly in AgentCard's
 select-phase `setup`. It should then point to
 `https://docs.agentcard.sh/companies/integration-guide.md` for the remaining
 product integration steps. The browse URL remains
-`https://agentcard.sh/?via=jcode-discovery` for human/browser acquisition.
+`https://agentcard.sh/?via=mona-discovery` for human/browser acquisition.
 
 Do not make Jcode fetch and execute mutable third-party documentation at
 runtime. Keep the short attribution-bearing command in Jcode's hosted catalog,
@@ -74,16 +74,16 @@ python scripts/benchmark_attribution.py --live --live-web --sponsor agentcard
 The second command exercises the live browse and select API used by release
 Jcode binaries. It must report AgentCard's CLI attribution as `attributed` and
 score 100. In particular, the returned setup must contain the literal
-`--via jcode-discovery` marker.
+`--via mona-discovery` marker.
 
 Then perform one clean acceptance signup with the latest release binary:
 
 1. Start Jcode in a clean test environment.
 2. Ask it to set up AgentCard for a test purchase, but do not fund or spend.
-3. Confirm the selected setup includes `--via jcode-discovery`.
+3. Confirm the selected setup includes `--via mona-discovery`.
 4. Approve creation of a dedicated test account.
 5. In AgentCard's production/admin data, verify that account has immutable
-   `acquisition_source = jcode-discovery`.
+   `acquisition_source = mona-discovery`.
 6. Repeat login without `--via` and verify the source remains unchanged.
 7. Delete or retain the test account according to AgentCard's test-data policy.
 

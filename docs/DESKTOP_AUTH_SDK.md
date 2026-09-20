@@ -1,6 +1,6 @@
 # Native desktop login with the Rust SDK
 
-`jcode-sdk` exports `AuthClient`, `AuthOptions`, `LoginProvider`, `LoginMethod`,
+`mona-sdk` exports `AuthClient`, `AuthOptions`, `LoginProvider`, `LoginMethod`,
 `AuthFlow`, `AuthPrompt`, `AuthInputKind`, and `AuthResult`.
 
 ## UI contract
@@ -34,8 +34,8 @@
 
 ## Runtime and compatibility
 
-`AuthOptions` selects a trusted local executable, `JCODE_HOME`, and the **daemon**
-socket (not the harness API socket). Defaults use `JCODE_BIN` or `jcode` on PATH,
+`AuthOptions` selects a trusted local executable, `MONA_HOME`, and the **daemon**
+socket (not the harness API socket). Defaults use `MONA_BIN` or `jcode` on PATH,
 inherit the credential home, and use the normal daemon socket. The client is
 local-only. A desktop attached over SSH must explicitly disable this local flow.
 
@@ -62,5 +62,5 @@ Unit tests cover catalog resolution, secret-free stdin transport, loopback
 completion and request rejection, port-conflict fallback, bounded errors,
 validation warnings, daemon notification, timeout/reaping, concurrent cancellation,
 and drop cleanup. An opt-in `installed_cli_begin_cancel_isolated` test uses
-`JCODE_AUTH_TEST_BINARY` with empty temporary homes for Claude/OpenAI begin/cancel.
+`MONA_AUTH_TEST_BINARY` with empty temporary homes for Claude/OpenAI begin/cancel.
 It neither opens browsers nor completes OAuth or prints authorization URLs.

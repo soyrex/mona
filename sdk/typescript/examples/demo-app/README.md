@@ -16,6 +16,6 @@ The SDK inherits your existing jcode provider logins by default. The private
 instance has separate sessions and state, and `client.close()` removes it when
 the application exits.
 
-Set `JCODE_BINARY=/full/path/to/jcode` when testing a particular local build.
+Set `MONA_BINARY=/full/path/to/jcode` when testing a particular local build.
 For a production application, handle permission requests explicitly instead of
 using `autoApprove: true`.

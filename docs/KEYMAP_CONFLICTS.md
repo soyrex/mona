@@ -53,13 +53,13 @@ The report names the conflicting jcode action and its config field, e.g.:
 
 To fix, either:
 
-- rebind the jcode action in `~/.jcode/config.toml` under `[keybindings]`
+- rebind the jcode action in `~/.mona/config.toml` under `[keybindings]`
   (e.g. `model_switch_next = "ctrl+shift+m"`), or
 - change the conflicting shortcut in your terminal or OS settings.
 
 ## Implementation
 
-All logic lives in `crates/jcode-setup-hints/src/keymap/`:
+All logic lives in `crates/mona-setup-hints/src/keymap/`:
 
 - `chord.rs` - `KeyChord`, a normalized `(cmd/ctrl/alt/shift + key)` that unifies
   the different key spellings each source uses, plus `KeyChord::parse` for
@@ -73,7 +73,7 @@ All logic lives in `crates/jcode-setup-hints/src/keymap/`:
   produces the stable signature used for startup debounce.
 - `report.rs` - render the human-readable report and the compact status line.
 - `mod.rs` - `collect_snapshot` / `refresh_and_save` / `snapshot_cached_or_refresh`
-  (persisted to `~/.jcode/keymap-snapshot.json`).
+  (persisted to `~/.mona/keymap-snapshot.json`).
 
 The pure parsing/decoding/diffing functions are unit-tested and do not touch the
 machine; only the `read_*` wrappers shell out.

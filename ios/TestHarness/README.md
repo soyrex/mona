@@ -9,7 +9,7 @@ built against on this machine, without a device, network, or provider cost.
 
 - **`mock_gateway.py`** - a self-contained (stdlib-only) mock of the jcode
   server gateway. Speaks the exact wire protocol from
-  `crates/jcode-base/src/gateway.rs` on one TCP port:
+  `crates/mona-base/src/gateway.rs` on one TCP port:
   - `GET /health` -> status/version
   - `POST /pair` -> token exchange (code `123456` by default)
   - `GET /ws` -> WebSocket upgrade carrying the newline-delimited JSON protocol
@@ -29,7 +29,7 @@ built against on this machine, without a device, network, or provider cost.
 ## Usage
 
 ```bash
-# Full pipeline, screenshot lands in $TMPDIR/jcode-ios-e2e/chat.png
+# Full pipeline, screenshot lands in $TMPDIR/mona-ios-e2e/chat.png
 ./TestHarness/run_e2e.sh
 
 # Also exercise the out-of-band notice toasts
@@ -43,7 +43,7 @@ python3 TestHarness/protocol_smoke_test.py --port 7643
 ## How auto-connect is seeded
 
 The app stores paired servers in the Keychain, falling back to
-`Library/Application Support/jcode-servers.json` when the Keychain is
+`Library/Application Support/mona-servers.json` when the Keychain is
 unavailable (unsigned simulator builds). The harness writes that JSON directly
 into the app's data container so the app auto-connects on launch, bypassing the
 SpringBoard "Open in app?" deep-link confirmation that can't be scripted.

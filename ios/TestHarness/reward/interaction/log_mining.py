@@ -1,6 +1,6 @@
-"""Ground the jcode-mobile user model in the user's REAL TUI usage logs.
+"""Ground the mona-mobile user model in the user's REAL TUI usage logs.
 
-This module streams the last N daily logs under ``~/.jcode/logs`` and mines
+This module streams the last N daily logs under ``~/.mona/logs`` and mines
 proxies for "what the user actually does", then maps those TUI actions onto the
 set of actions the iOS app must also support. The output (:class:`UsageProfile`)
 feeds the mobile ``ActionGraph`` as relative edge weights (see ``model.py``).
@@ -139,7 +139,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 # TUI-only verbs we explicitly acknowledge and drop (no mobile analogue).
 TUI_ONLY_DROPPED: tuple[str, ...] = ("diff_mode", "side_panel")
 
-_DATE_RE = re.compile(r"jcode-(\d{4}-\d{2}-\d{2})\.log$")
+_DATE_RE = re.compile(r"mona-(\d{4}-\d{2}-\d{2})\.log$")
 _REQUEST_KIND_RE = re.compile(r"request_kind=([a-z_]+)")
 _REMOTE_KIND_RE = re.compile(r"REMOTE_INTERRUPT_SEND_START kind=([a-z_]+)")
 
@@ -202,7 +202,7 @@ def _normalize(weights: dict[str, float]) -> dict[str, float]:
 
 def _select_log_files(log_dir: str, days: int) -> list[tuple[str, str]]:
     """Return up to `days` (date, path) pairs, most recent first, by filename date."""
-    pattern = os.path.join(log_dir, "jcode-*.log")
+    pattern = os.path.join(log_dir, "mona-*.log")
     dated: list[tuple[str, str]] = []
     for path in glob.glob(pattern):
         m = _DATE_RE.search(os.path.basename(path))
@@ -274,7 +274,7 @@ def _map_to_mobile(counts: dict[str, int]) -> dict[str, int]:
     }
 
 
-def mine_usage(log_dir: str = "~/.jcode/logs", days: int = 7) -> UsageProfile:
+def mine_usage(log_dir: str = "~/.mona/logs", days: int = 7) -> UsageProfile:
     """Mine the last `days` daily logs under `log_dir` into a :class:`UsageProfile`.
 
     Degrades gracefully: if the directory is absent, empty, or contains no
@@ -291,7 +291,7 @@ def mine_usage(log_dir: str = "~/.jcode/logs", days: int = 7) -> UsageProfile:
     files = _select_log_files(resolved, days)
     if not files:
         return _default_profile(
-            f"No jcode-YYYY-MM-DD.log files under {resolved!r}; using defaults."
+            f"No mona-YYYY-MM-DD.log files under {resolved!r}; using defaults."
         )
 
     counts: dict[str, int] = {

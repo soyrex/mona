@@ -54,7 +54,7 @@ openai_transport = "auto" # auto | websocket | https
 ```
 
 Prewarming is enabled by default for native OpenAI WebSockets. Set
-`JCODE_OPENAI_PREWARM=0` (also `false` or `off`) in the **server process** environment
+`MONA_OPENAI_PREWARM=0` (also `false` or `off`) in the **server process** environment
 to disable speculative warmup without disabling persistent WebSockets. Setting
 the transport to `https` disables both WebSockets and their warmup.
 
@@ -68,7 +68,7 @@ connection label. Logs do not include credential identities or warmup inputs.
 Run the runtime's offline regression suite:
 
 ```bash
-cargo test -p jcode-provider-openai-runtime --lib -- --test-threads=1
+cargo test -p mona-provider-openai-runtime --lib -- --test-threads=1
 ```
 
 The opt-in live test uses configured credentials and a few short model requests.
@@ -76,7 +76,7 @@ It checks a cold v2 connection, warmup consumption, and subsequent continuation
 using the newly compiled provider, independently of the shared daemon:
 
 ```bash
-cargo test -p jcode-provider-openai-runtime --lib \
+cargo test -p mona-provider-openai-runtime --lib \
   live_openai_v2_prewarm_and_continuation -- --ignored --nocapture --test-threads=1
 ```
 

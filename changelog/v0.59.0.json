@@ -3,8 +3,8 @@
   "date": "2026-07-25",
   "title": "Desktop preview and provider fixes",
   "highlights": [
-    "The desktop preview (jcode-desktop2) now starts the jcode runtime and harness bridge itself, so it connects on first launch instead of requiring two daemons to be started by hand",
-    "The desktop preview gained an animated, draggable hero donut on an empty session, a focus-aware caret and input border, and soft-wrapping multi-line composer; set JCODE_DESKTOP2_DONUT=0 to turn the motion off",
+    "The desktop preview (mona-desktop2) now starts the jcode runtime and harness bridge itself, so it connects on first launch instead of requiring two daemons to be started by hand",
+    "The desktop preview gained an animated, draggable hero donut on an empty session, a focus-aware caret and input border, and soft-wrapping multi-line composer; set MONA_DESKTOP2_DONUT=0 to turn the motion off",
     "New Celeris provider support"
   ],
   "improvements": [

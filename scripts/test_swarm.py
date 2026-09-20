@@ -21,7 +21,7 @@ import os
 import sys
 import time
 
-DEBUG_SOCKET = f"/run/user/{os.getuid()}/jcode-debug.sock"
+DEBUG_SOCKET = f"/run/user/{os.getuid()}/mona-debug.sock"
 TEST_DIR = "/tmp/swarm-test"
 
 
@@ -472,7 +472,7 @@ def main():
     if not os.path.exists(DEBUG_SOCKET):
         print(f"Error: Debug socket not found: {DEBUG_SOCKET}")
         print("Make sure jcode server is running with debug_control enabled:")
-        print("  touch ~/.jcode/debug_control")
+        print("  touch ~/.mona/debug_control")
         print("  jcode serve")
         sys.exit(1)
 

@@ -23,7 +23,7 @@ use provider_init::ProviderChoice;
 
 #[cfg(any(target_os = "linux", test))]
 fn is_file_controlled_debug_client() -> bool {
-    std::env::var_os("JCODE_DEBUG_CMD_PATH").is_some()
+    std::env::var_os("MONA_DEBUG_CMD_PATH").is_some()
 }
 
 #[cfg(target_os = "linux")]
@@ -101,28 +101,28 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
         .filter(|value| !value.is_empty())
     {
         provider_catalog::apply_named_provider_profile_env(profile_name)?;
-        crate::env::set_var("JCODE_PROVIDER_PROFILE_NAME", profile_name);
-        crate::env::set_var("JCODE_PROVIDER_PROFILE_ACTIVE", "1");
+        crate::env::set_var("MONA_PROVIDER_PROFILE_NAME", profile_name);
+        crate::env::set_var("MONA_PROVIDER_PROFILE_ACTIVE", "1");
         args.provider = ProviderChoice::OpenaiCompatible;
     }
 
     if let Some(tool_profile) = args.tool_profile.as_deref() {
-        crate::env::set_var("JCODE_TOOL_PROFILE", tool_profile);
+        crate::env::set_var("MONA_TOOL_PROFILE", tool_profile);
     }
     if let Some(tools) = args.tools.as_deref() {
-        crate::env::set_var("JCODE_TOOLS", tools);
+        crate::env::set_var("MONA_TOOLS", tools);
     }
     if let Some(disabled_tools) = args.disabled_tools.as_deref() {
-        crate::env::set_var("JCODE_DISABLED_TOOLS", disabled_tools);
+        crate::env::set_var("MONA_DISABLED_TOOLS", disabled_tools);
     }
     if args.disable_base_tools {
-        crate::env::set_var("JCODE_DISABLE_BASE_TOOLS", "1");
+        crate::env::set_var("MONA_DISABLE_BASE_TOOLS", "1");
     }
     if let Some(mcp_tools) = args.mcp_tools.as_deref() {
-        crate::env::set_var("JCODE_MCP_TOOLS", mcp_tools);
+        crate::env::set_var("MONA_MCP_TOOLS", mcp_tools);
     }
     if let Some(threshold) = args.mcp_tools_token_threshold {
-        crate::env::set_var("JCODE_MCP_TOOLS_TOKEN_THRESHOLD", threshold.to_string());
+        crate::env::set_var("MONA_MCP_TOOLS_TOKEN_THRESHOLD", threshold.to_string());
     }
     if args.tool_profile.is_some()
         || args.tools.is_some()
@@ -134,33 +134,13 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
         crate::config::invalidate_config_cache();
     }
 
+    // mona surface: only `mona acp` is reachable. Everything else errors with
+    // a hint to use the supported command. This is part of the Phase 1 strip:
+    // the CLI parser still knows the full upstream `Command` enum, but the
+    // dispatch rejects anything that isn't `Acp` so the binary advertises a
+    // single, ACP-only surface. See `docs/FUTURE-CLEANUPS.md` for the full
+    // plan to delete the unused arms and the supporting modules.
     match args.command {
-        Some(Command::Serve {
-            temporary_server,
-            owner_pid,
-            temp_idle_timeout_secs,
-            server_name,
-        }) => {
-            let serve_start = Instant::now();
-            crate::env::set_var("JCODE_NON_INTERACTIVE", "1");
-            if temporary_server {
-                server::configure_temporary_server(owner_pid, temp_idle_timeout_secs);
-            }
-            let provider_start = Instant::now();
-            let provider =
-                provider_init::init_provider(&args.provider, args.model.as_deref()).await?;
-            let provider_ms = provider_start.elapsed().as_millis();
-            let server_new_start = Instant::now();
-            let server = server::Server::new_with_name(provider, server_name);
-            let server_new_ms = server_new_start.elapsed().as_millis();
-            crate::logging::info(&format!(
-                "[TIMING] serve bootstrap: provider_init={}ms, server_new={}ms, before_run={}ms",
-                provider_ms,
-                server_new_ms,
-                serve_start.elapsed().as_millis()
-            ));
-            server.run().await?;
-        }
         Some(Command::Acp) => {
             acp::run_acp_command(
                 args.provider,
@@ -170,469 +150,42 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
             )
             .await?;
         }
-        Some(Command::Connect) => {
-            tui_launch::run_client().await?;
+        Some(other) => {
+            let name = command_name(&other);
+            anyhow::bail!(
+                "`{name}` is not supported in `mona` (Monitter harness). \
+                 The only supported command is `mona acp`. See docs/FUTURE-CLEANUPS.md \
+                 if you need a different surface."
+            );
         }
-        #[cfg(unix)]
-        Some(Command::ApiBridge { api_socket, stdio }) => {
-            if stdio {
-                crate::env::set_var("JCODE_NON_INTERACTIVE", "1");
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    spawn_server(
-                        &args.provider,
-                        args.model.as_deref(),
-                        args.provider_profile.as_deref(),
-                    ),
-                )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!("api --stdio: timed out starting the jcode server")
-                })??;
-                jcode_harness_api_server::run_bridge_stdio(
-                    jcode_harness_api_server::legacy_socket_path(),
-                )
-                .await?;
-                return Ok(());
-            }
-            // The daemon must be up for the bridge to translate onto, and a
-            // user running this to try the SDK has usually never started one.
-            // Starting it here turns "connection refused, good luck" into a
-            // working socket.
-            //
-            // Best-effort on purpose: a spawn can legitimately fail while a
-            // usable daemon exists (another build already holds the runtime
-            // dir, say). Aborting then would leave the SDK with no endpoint
-            // over a daemon that was fine, so report and listen anyway. If the
-            // daemon really is absent, per-client dials fail with a message
-            // naming the socket, which is the smaller and more accurate error.
-            if let Err(error) = spawn_server(
-                &args.provider,
-                args.model.as_deref(),
-                args.provider_profile.as_deref(),
-            )
-            .await
-            {
-                eprintln!("api-bridge: could not start the jcode server: {error:#}");
-                eprintln!("api-bridge: continuing; an already-running server will still be used");
-            }
-            let api_socket = api_socket
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(jcode_harness_api_server::api_socket_path);
-            // The global `--socket` (and `JCODE_SOCKET`) already selects the
-            // daemon socket; `set_socket_path` exported it during startup.
-            let legacy_socket = jcode_harness_api_server::legacy_socket_path();
-            jcode_harness_api_server::run_bridge(api_socket, legacy_socket).await?;
+        None => {
+            // No subcommand: print a short banner explaining the surface.
+            // The clap Parser will have already printed --help for `--help`/`-h`.
+            eprintln!(
+                "mona: Monitter-owned ACP harness (forked from jcode v0.86.0).\n\
+                 \n\
+                 Supported command:\n  \
+                   mona acp       Run as an Agent Client Protocol (ACP) stdio server.\n\
+                 \n\
+                 Run `mona acp --help` for ACP-specific flags.\n\
+                 Run `mona --help` for global flags."
+            );
         }
-        Some(Command::Server { action }) => match action {
-            #[cfg(unix)]
-            ServerCommand::Stdio => {
-                crate::env::set_var("JCODE_NON_INTERACTIVE", "1");
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    spawn_server_with_executable(
-                        &args.provider,
-                        args.model.as_deref(),
-                        args.provider_profile.as_deref(),
-                        Some(std::env::current_exe()?),
-                    ),
-                )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!("server stdio: timed out starting the remote daemon")
-                })??;
-                super::ssh_transport::run_stdio(server::socket_path()).await?;
-            }
-            ServerCommand::Start { json } => {
-                spawn_server(
-                    &args.provider,
-                    args.model.as_deref(),
-                    args.provider_profile.as_deref(),
-                )
-                .await?;
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "status": "running",
-                        })
-                    );
-                } else {
-                    println!("Jcode server is running.");
-                }
-            }
-            ServerCommand::Keepalive => {
-                run_server_keepalive(
-                    &args.provider,
-                    args.model.as_deref(),
-                    args.provider_profile.as_deref(),
-                )
-                .await?;
-            }
-            ServerCommand::Promote { version, json } => {
-                commands::run_server_promote_command(version.as_deref(), json)?;
-            }
-            ServerCommand::Reload { force, json } => {
-                commands::run_server_reload_command(force, json).await?;
-            }
-            ServerCommand::Stop { force, json } => {
-                commands::run_server_stop_command(force, json).await?;
-            }
-        },
-        Some(Command::Run {
-            message,
-            json,
-            ndjson,
-        }) => {
-            commands::run_single_message_command(
-                &args.provider,
-                args.model.as_deref(),
-                args.resume.as_deref(),
-                &message,
-                json,
-                ndjson,
-            )
-            .await?;
-        }
-        Some(Command::Login {
-            provider: login_provider,
-            account,
-            no_browser,
-            print_auth_url,
-            callback_url,
-            auth_code,
-            json,
-            complete,
-            flow_id,
-            cancel,
-            no_validate,
-            google_access_tier,
-            api_base,
-            api_key,
-            api_key_env,
-        }) => {
-            login::run_login(
-                &login_provider.unwrap_or(args.provider),
-                account.as_deref(),
-                login::LoginOptions {
-                    no_browser,
-                    print_auth_url,
-                    callback_url,
-                    auth_code,
-                    json,
-                    complete,
-                    flow_id,
-                    cancel,
-                    no_validate,
-                    google_access_tier: google_access_tier.map(|tier| match tier {
-                        super::args::GoogleAccessTierArg::Full => {
-                            auth::google::GmailAccessTier::Full
-                        }
-                        super::args::GoogleAccessTierArg::Readonly => {
-                            auth::google::GmailAccessTier::ReadOnly
-                        }
-                    }),
-                    openai_compatible_api_base: api_base,
-                    openai_compatible_api_key: api_key,
-                    openai_compatible_api_key_env: api_key_env,
-                    openai_compatible_default_model: args.model.clone(),
-                },
-            )
-            .await?;
-        }
-        Some(Command::Account { action }) => match action {
-            super::args::AccountCommand::Login { no_browser } => {
-                account::run_login(no_browser).await?
-            }
-            super::args::AccountCommand::Status { json } => account::run_status(json).await?,
-            super::args::AccountCommand::Manage => account::run_manage()?,
-            super::args::AccountCommand::Logout => account::run_logout().await?,
-        },
-        Some(Command::Repl) => {
-            let (provider, registry) =
-                provider_init::init_provider_and_registry(&args.provider, args.model.as_deref())
-                    .await?;
-            let mut agent = agent::Agent::new(provider, registry);
-            agent.repl().await?;
-        }
-        Some(Command::Update) => {
-            hot_exec::run_update()?;
-        }
-        Some(Command::Version { json }) => {
-            commands::run_version_command(json)?;
-        }
-        Some(Command::Usage { json }) => {
-            commands::run_usage_command(json).await?;
-        }
-        Some(Command::Telemetry(action)) => super::telemetry::run(action)?,
-        Some(Command::SelfDev { build }) => {
-            selfdev::run_self_dev(build, args.resume).await?;
-        }
-        Some(Command::Debug {
-            command,
-            arg,
-            session,
-            socket,
-            wait,
-        }) => {
-            debug::run_debug_command(&command, &arg, session, socket, wait).await?;
-        }
-        Some(Command::Auth(subcmd)) => match subcmd {
-            AuthCommand::Import { .. } => unreachable!("auth import handled before bootstrap"),
-            AuthCommand::Status { json } => commands::run_auth_status_command(json)?,
-            AuthCommand::Doctor {
-                provider,
-                validate,
-                json,
-            } => {
-                let provider_arg = auth_doctor_provider_arg(provider.as_deref(), &args.provider);
-                commands::run_auth_doctor_command(provider_arg, validate, json).await?
-            }
-        },
-        Some(Command::Provider(subcmd)) => match subcmd {
-            ProviderCommand::List { json } => {
-                commands::run_provider_list_command(json)?;
-            }
-            ProviderCommand::Current { json } => {
-                commands::run_provider_current_command(&args.provider, args.model.as_deref(), json)
-                    .await?;
-            }
-            ProviderCommand::Add {
-                name,
-                base_url,
-                model,
-                context_window,
-                api_key_env,
-                api_key,
-                api_key_stdin,
-                no_api_key,
-                auth,
-                auth_header,
-                env_file,
-                set_default,
-                overwrite,
-                provider_routing,
-                model_catalog,
-                json,
-            } => {
-                commands::run_provider_add_command(commands::ProviderAddOptions {
-                    name,
-                    base_url,
-                    model,
-                    context_window,
-                    api_key_env,
-                    api_key,
-                    api_key_stdin,
-                    no_api_key,
-                    auth,
-                    auth_header,
-                    env_file,
-                    set_default,
-                    overwrite,
-                    provider_routing,
-                    model_catalog,
-                    json,
-                })?;
-            }
-        },
-        Some(Command::Memory(subcmd)) => {
-            commands::run_memory_command(map_memory_subcommand(subcmd)).await?;
-        }
-        Some(Command::Session(subcmd)) => match subcmd {
-            SessionCommand::Rename {
-                session,
-                name,
-                clear,
-                json,
-            } => commands::run_session_rename_command(&session, name.as_deref(), clear, json)?,
-        },
-        Some(Command::Ambient(subcmd)) => {
-            commands::run_ambient_command(map_ambient_subcommand(subcmd)).await?;
-        }
-        Some(Command::Cloud(subcmd)) => {
-            commands::run_cloud_command(map_cloud_subcommand(subcmd))?;
-        }
-        Some(Command::Pair { list, revoke }) => {
-            commands::run_pair_command(list, revoke)?;
-        }
-        Some(Command::Permissions) => {
-            tui::permissions::run_permissions()?;
-        }
-        Some(Command::Transcript {
-            text,
-            mode,
-            session,
-        }) => {
-            commands::run_transcript_command(text, map_transcript_mode(mode), session).await?;
-        }
-        Some(Command::Dictate { r#type }) => {
-            commands::run_dictate_command(r#type).await?;
-        }
-        Some(Command::SetupHotkey {
-            listen_macos_hotkey,
-            notify_cli_launch,
-            listen_windows_hotkey,
-            uninstall,
-        }) => {
-            setup_hints::run_setup_hotkey(
-                listen_macos_hotkey,
-                listen_windows_hotkey,
-                uninstall,
-                notify_cli_launch.as_deref(),
-            )?;
-        }
-        Some(Command::SetupLauncher) => {
-            setup_hints::run_setup_launcher()?;
-        }
-        Some(Command::Browser { action }) => {
-            commands::run_browser(&action).await?;
-        }
-        Some(Command::Replay {
-            session,
-            swarm,
-            export,
-            speed,
-            timeline,
-            auto_edit,
-            video,
-            cols,
-            rows,
-            fps,
-            centered,
-            no_centered,
-        }) => {
-            let centered_override = if centered {
-                Some(true)
-            } else if no_centered {
-                Some(false)
-            } else {
-                None
-            };
-            tui_launch::run_replay_command(
-                &session,
-                swarm,
-                export,
-                auto_edit,
-                speed,
-                timeline.as_deref(),
-                video.as_deref(),
-                cols,
-                rows,
-                fps,
-                centered_override,
-            )
-            .await?;
-        }
-        Some(Command::Model(subcmd)) => match subcmd {
-            ModelCommand::List { json, verbose } => {
-                commands::run_model_command(&args.provider, args.model.as_deref(), json, verbose)
-                    .await?;
-            }
-        },
-        Some(Command::ProviderTestCoverage {
-            provider_query,
-            model_query,
-            coverage_file,
-            coverage_limit,
-        }) => {
-            let coverage_path = coverage_file.as_deref().map(std::path::Path::new);
-            let colorize = std::io::stdout().is_terminal()
-                && std::env::var_os("NO_COLOR").is_none()
-                && std::env::var_os("JCODE_NO_COLOR").is_none();
-            if let Some(provider) = provider_query {
-                let model = model_query
-                    .or_else(|| args.model.clone())
-                    .unwrap_or_else(|| "*".to_string());
-                let report = crate::live_tests::format_provider_test_coverage_report(
-                    &provider,
-                    &model,
-                    coverage_path,
-                );
-                print_provider_test_coverage_report(&report, colorize);
-            } else {
-                let (coverage, path) = crate::live_tests::load_coverage(coverage_path)?;
-                let summary = crate::live_tests::strict_live_provider_model_coverage_summary(
-                    &coverage,
-                    path.display().to_string(),
-                );
-                let report = crate::live_tests::format_strict_live_provider_model_coverage_summary(
-                    &summary,
-                    coverage_limit,
-                );
-                print_provider_test_coverage_report(&report, colorize);
-            }
-        }
-        Some(Command::ProviderDoctor {
-            provider,
-            tier,
-            json,
-        }) => {
-            crate::cli::provider_doctor::run_provider_doctor_command(
-                &provider,
-                args.model.as_deref(),
-                &tier,
-                json,
-            )
-            .await?;
-        }
-        Some(Command::AuthTest {
-            login,
-            all_configured,
-            no_smoke,
-            no_tool_smoke,
-            prompt,
-            json,
-            output,
-            coverage,
-            context_audit,
-            coverage_file,
-            coverage_limit,
-        }) => {
-            if coverage {
-                commands::run_auth_test_coverage_command(
-                    json,
-                    output.as_deref(),
-                    coverage_file.as_deref(),
-                    coverage_limit,
-                )?;
-            } else if context_audit {
-                commands::run_auth_test_context_audit_command(
-                    &args.provider,
-                    all_configured,
-                    json,
-                    output.as_deref(),
-                )
-                .await?;
-            } else {
-                commands::run_auth_test_command(
-                    &args.provider,
-                    args.model.as_deref(),
-                    login,
-                    all_configured,
-                    no_smoke,
-                    no_tool_smoke,
-                    prompt.as_deref(),
-                    json,
-                    output.as_deref(),
-                )
-                .await?;
-            }
-        }
-        Some(Command::Restart { action }) => match action {
-            RestartCommand::Save { auto_restore } => {
-                commands::run_restart_save_command(auto_restore).await?
-            }
-            RestartCommand::Restore => commands::run_restart_restore_command()?,
-            RestartCommand::Status => commands::run_restart_status_command()?,
-            RestartCommand::Clear => commands::run_restart_clear_command()?,
-        },
-        Some(Command::Menubar { once, json }) => {
-            commands::run_menubar_command(once, json)?;
-        }
-        None => run_default_command(args).await?,
     }
 
     Ok(())
+}
+
+/// Best-effort human-readable name for a `Command` variant, used in the
+/// "not supported in mona" error message.
+///
+/// Returns just the leading variant name (e.g. `serve`, `repl`, `login`),
+/// stripping any inner fields, by stringifying via the `Debug` impl and
+/// taking everything before the first `{`, `(`, or `(`.
+fn command_name(cmd: &Command) -> String {
+    let raw = format!("{cmd:?}");
+    let end = raw.find(['{', '(']).unwrap_or(raw.len());
+    raw[..end].trim().to_string()
 }
 
 fn auth_doctor_provider_arg<'a>(
@@ -662,7 +215,7 @@ fn resolve_resume_arg(args: &mut Args) -> Result<()> {
             Err(e) => {
                 match resume_resolution_failure_action(&resume_id, |key| std::env::var_os(key)) {
                     // During a reload/update/restart handoff the client re-execs
-                    // itself with `--resume <id>` and `JCODE_RESUMING=1`. In the
+                    // itself with `--resume <id>` and `MONA_RESUMING=1`. In the
                     // client/server architecture the shared server is the authority
                     // for session lifecycle, so an id that is not in the local store
                     // can still be valid server-side. Hard-exiting here dumped the
@@ -712,7 +265,7 @@ fn resume_resolution_failure_action<F, V>(
 where
     F: Fn(&str) -> Option<V>,
 {
-    if var_os("JCODE_RESUMING").is_some() {
+    if var_os("MONA_RESUMING").is_some() {
         ResumeResolutionFailureAction::DeferToServer
     } else {
         ResumeResolutionFailureAction::Exit
@@ -964,8 +517,8 @@ async fn run_default_command(args: Args) -> Result<()> {
     startup_profile::mark("crash_resume_hint");
 
     let cwd = std::env::current_dir()?;
-    let in_jcode_repo = build::is_jcode_repo(&cwd);
-    startup_profile::mark("is_jcode_repo");
+    let in_mona_repo = build::is_mona_repo(&cwd);
+    startup_profile::mark("is_mona_repo");
     let already_in_selfdev = crate::cli::selfdev::client_selfdev_requested();
 
     // Record where this interactive launch happened so the system-wide launch
@@ -977,7 +530,7 @@ async fn run_default_command(args: Args) -> Result<()> {
         setup_hints::record_launch_dirs(&cwd, repo_dir.as_deref());
     }
 
-    if in_jcode_repo && !already_in_selfdev && !args.no_selfdev {
+    if in_mona_repo && !already_in_selfdev && !args.no_selfdev {
         output::stderr_info("📍 Detected jcode repository - enabling self-dev mode");
         output::stderr_info("   Using shared server with self-dev session mode");
         output::stderr_info("   (use --no-selfdev to disable auto-detection)");
@@ -993,7 +546,7 @@ async fn run_default_command(args: Args) -> Result<()> {
     // server check/spawn below. Safe only because nothing has entered raw mode
     // or started reading stdin yet, and it is skipped for exec handoffs where
     // the inherited terminal is already live.
-    if std::env::var_os("JCODE_RESUMING").is_none() {
+    if std::env::var_os("MONA_RESUMING").is_none() {
         crate::tui::theme_detect::prewarm_theme_mode();
     }
     let mut server_running = if args.fresh_spawn {
@@ -1007,7 +560,7 @@ async fn run_default_command(args: Args) -> Result<()> {
         server_running = wait_for_existing_reload_server("client startup").await;
     }
 
-    if !server_running && std::env::var("JCODE_RESUMING").is_ok() {
+    if !server_running && std::env::var("MONA_RESUMING").is_ok() {
         server_running = wait_for_resuming_server(
             "client startup without reload marker",
             std::time::Duration::from_secs(5),
@@ -1056,7 +609,7 @@ async fn run_default_command(args: Args) -> Result<()> {
     }
 
     startup_profile::mark("pre_tui_client");
-    if std::env::var("JCODE_RESUMING").is_err() && server_running {
+    if std::env::var("MONA_RESUMING").is_err() && server_running {
         output::stderr_info("Connecting to server...");
     }
     tui_launch::run_tui_client(
@@ -1258,7 +811,7 @@ pub(crate) async fn maybe_prompt_server_bootstrap_login(
     // legacy headless CLI bootstrap flow. On Windows those reads may trigger
     // expensive security-product inspection even when credentials are already
     // configured, delaying every cold launch before the server is spawned.
-    let cli_bootstrap_requested = std::env::var_os("JCODE_CLI_BOOTSTRAP_LOGIN").is_some();
+    let cli_bootstrap_requested = std::env::var_os("MONA_CLI_BOOTSTRAP_LOGIN").is_some();
     if !should_detect_cli_bootstrap_credentials(provider_choice, cli_bootstrap_requested) {
         startup_profile::mark("cred_check_done");
         return Ok(());
@@ -1277,7 +830,7 @@ pub(crate) async fn maybe_prompt_server_bootstrap_login(
     //
     // The only thing left to honor at the CLI layer is an explicit headless
     // bootstrap (e.g. CI / non-interactive provisioning), which opts in via the
-    // `JCODE_CLI_BOOTSTRAP_LOGIN` env var.
+    // `MONA_CLI_BOOTSTRAP_LOGIN` env var.
     if cred_state.has_any {
         return Ok(());
     }
@@ -1377,14 +930,14 @@ async fn spawn_server_with_executable(
     let mut cmd = ProcessCommand::new(&exe);
     cmd.env_remove(selfdev::CLIENT_SELFDEV_ENV);
     if client_requested_selfdev {
-        cmd.env("JCODE_DEBUG_CONTROL", "1");
+        cmd.env("MONA_DEBUG_CONTROL", "1");
     }
     cmd.arg("--provider").arg(provider_choice.as_arg_value());
     // The interactive TUI owns first-run onboarding/login. Let the spawned
     // server boot with a deferred (credential-less) provider when nothing is
     // configured yet, instead of bailing; the TUI activates a provider via the
     // in-TUI `/login` flow. See init_provider_with_options.
-    cmd.env("JCODE_DEFERRED_AUTH_BOOTSTRAP", "1");
+    cmd.env("MONA_DEFERRED_AUTH_BOOTSTRAP", "1");
     if let Some(provider_profile) = provider_profile {
         cmd.arg("--provider-profile").arg(provider_profile);
     }

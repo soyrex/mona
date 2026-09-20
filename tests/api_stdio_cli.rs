@@ -1,6 +1,6 @@
 #![cfg(unix)]
 //! Native CLI boundary, using a fake daemon and fully isolated state/config.
-use jcode_harness_api::{API_VERSION_MAJOR, ApiEvent, ApiRequest, ClientFrame, ServerFrame};
+use mona_harness_api::{API_VERSION_MAJOR, ApiEvent, ApiRequest, ClientFrame, ServerFrame};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::process::{Child, Command, Stdio};
@@ -29,12 +29,12 @@ fn exercise_stdio(close_daemon_first: bool) {
             .current_dir(root.path())
             .env_clear()
             .env("HOME", root.path())
-            .env("JCODE_HOME", &home)
-            .env("JCODE_RUNTIME_DIR", &runtime)
+            .env("MONA_HOME", &home)
+            .env("MONA_RUNTIME_DIR", &runtime)
             .env("XDG_RUNTIME_DIR", &runtime)
-            .env("JCODE_NO_TELEMETRY", "1")
-            .env("JCODE_SOCKET", &socket)
-            .env("JCODE_API_SOCKET", runtime.join("unused-api.sock"))
+            .env("MONA_NO_TELEMETRY", "1")
+            .env("MONA_SOCKET", &socket)
+            .env("MONA_API_SOCKET", runtime.join("unused-api.sock"))
             .env("XDG_CONFIG_HOME", root.path().join("config"))
             .env("XDG_CACHE_HOME", root.path().join("cache"))
             .env("PATH", "/usr/bin:/bin")

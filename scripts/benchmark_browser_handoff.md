@@ -29,10 +29,10 @@ python3 scripts/benchmark_browser_handoff.py --self-test
 python3 scripts/benchmark_browser_handoff.py \
   --binary "$PWD/target/selfdev/jcode" \
   --model 'openai-api:gpt-6-astra' \
-  --jcode-home "$JCODE_SCRATCH_DIR/prepared-browser-benchmark-home" \
+  --mona-home "$MONA_SCRATCH_DIR/prepared-browser-benchmark-home" \
   --tab-id 123 \
   --trials 3 --timeout 240 \
-  --output "$JCODE_SCRATCH_DIR/browser-handoff-$(date +%s)"
+  --output "$MONA_SCRATCH_DIR/browser-handoff-$(date +%s)"
 ```
 
 Use an available model/route, not necessarily the example above. If needed,
@@ -50,14 +50,14 @@ and terminates only that daemon/process group. Shared Jcode daemons are not
 restarted or repointed. The caller-prepared isolated home is used without copying credentials into
 reports. Browser-session and provider environment settings are inherited. Startup probing and daemon shutdown are excluded from elapsed time.
 Browser setup is a coordinator prerequisite, not a measured step. The harness
-enables `JCODE_DEBUG_CONTROL=1` only in its isolated daemon/client environment
+enables `MONA_DEBUG_CONTROL=1` only in its isolated daemon/client environment
 for `debug --socket <trial-socket> server:info` readiness checks. Startup failures
 include the last probe response and the exact daemon log path.
 
 `--arm jev` explicitly asks the parent to delegate the whole task and supplied
 text to Jev. `--arm normal` instead measures natural-default routing and never
 mentions handoff in that arm's prompt. Do not pool these experiments. The direct
-arm prohibits handoff in its prompt and sets `JCODE_BROWSER_HANDOFF_DISABLED=1`
+arm prohibits handoff in its prompt and sets `MONA_BROWSER_HANDOFF_DISABLED=1`
 in **both daemon and client** environments. Other arms set it to `0`. The runtime
 guard activates only for the exact value `1`: it removes handoff and its task-only
 fields from the schema, replaces the handoff-default guidance with direct-action

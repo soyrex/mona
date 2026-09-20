@@ -1,0 +1,27 @@
+[package]
+name = "mona-telemetry-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "mona_telemetry_core"
+path = "src/lib.rs"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+mona-build-meta = { path = "../mona-build-meta" }
+mona-core = { path = "../mona-core" }
+mona-logging = { path = "../mona-logging" }
+mona-provider-core = { path = "../mona-provider-core" }
+mona-selfdev-types = { path = "../mona-selfdev-types" }
+mona-storage = { path = "../mona-storage" }
+mona-usage-types = { path = "../mona-usage-types" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "charset", "http2", "system-proxy", "rustls-tls", "rustls-tls-native-roots"] }
+serde_json = "1"
+walkdir = "2"
+tokio = { version = "1", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"

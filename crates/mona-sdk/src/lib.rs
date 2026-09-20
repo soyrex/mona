@@ -1,0 +1,96 @@
+//! Rust SDK for the jcode harness.
+//!
+//! The API crate (`mona-harness-api`) defines the wire protocol. This crate
+//! is what you actually build a client with: connect, drive sessions, stream
+//! events, and get told why the connection died in a sentence a user can act
+//! on.
+//!
+//! It is the Rust counterpart of `sdk/typescript`, and deliberately mirrors it
+//! capability for capability. Desktop2 is built on this crate rather than on
+//! the raw protocol, so the SDK's design is exercised by a real, shipping
+//! client every day rather than only by its own examples.
+//!
+//! ```no_run
+//! use mona_sdk::{ConnectOptions, JcodeClient, RunOptions};
+//!
+//! let client = JcodeClient::connect(ConnectOptions::default())?;
+//! let session = client.create_session(None)?;
+//! let turn = client.run(&session.session_id, "what is 2 + 2?", RunOptions::default())?;
+//! println!("{}", turn.final_text);
+//! # Ok::<(), mona_sdk::Error>(())
+//! ```
+//!
+//! `TurnResult::text` retains the whole turn, including tool narration.
+//! `TurnResult::final_text` selects the last completed assistant message and
+//! `TurnResult::messages` exposes all completed messages. On older bridges
+//! without framing, `final_text` falls back to `text` and `messages` is empty.
+//! Reasoning interleaved between text chunks does not split a message.
+//! Streaming consumers should correlate `TextDelta`, `TextDone`, and
+//! `TextReplace` by their optional message id. An empty replacement retracts
+//! text, including messages completed before a provider retry. Wait for
+//! `TurnDone` before publishing an irreversible final answer. These ids are
+//! connection-local stream correlators, not persisted transcript ids.
+//!
+//! Connect to a remote user's persistent harness through system OpenSSH:
+//! ```no_run
+//! use mona_sdk::{JcodeClient, SshConnectOptions};
+//! let client = JcodeClient::connect_ssh(SshConnectOptions::new("my-ssh-alias"))?;
+//! let sessions = client.list_sessions()?;
+//! # Ok::<(), mona_sdk::Error>(())
+//! ```
+//! This uses existing SSH config, keys, agent, and known_hosts. Verify new host
+//! keys with SSH before connecting. The remote needs a release supporting
+//! `jcode api --stdio`, which is never installed or updated by this SDK. A POSIX
+//! remote shell is required. Dropping the final client clone kills and reaps its
+//! SSH child, not the remote shared daemon. `connect_timeout` bounds startup and
+//! hello independently of the ordinary request timeout.
+
+mod auth;
+mod client;
+mod diagnostics;
+mod errors;
+mod launch;
+mod ssh;
+mod structured;
+pub mod worktrees;
+
+#[cfg(test)]
+#[path = "sdk_tests/parity.rs"]
+mod parity_tests;
+
+pub use auth::{
+    AuthClient, AuthFlow, AuthInputKind, AuthOptions, AuthPrompt, AuthResult, LoginMethod,
+    LoginProvider,
+};
+pub use client::{
+    AssistantTextMessage, ConnectOptions, EventStream, FileContent, FileStatus, GlobalEventStream,
+    GlobalEventsOptions, JcodeClient, RunOptions, RuntimeInfo, SearchTextOptions, ToolCall,
+    Transport, TurnResult, UnixTransport, Usage,
+};
+pub use diagnostics::{SocketState, Stage, describe_disconnect, explain, human_duration};
+pub use errors::{Error, ErrorKind, Result};
+pub use mona_harness_api::{
+    SessionEditStats, enrich_sessions_from_edit_stats, enrich_sessions_from_local_edit_stats,
+    enrich_sessions_from_local_swarm_state, enrich_sessions_from_swarm_state,
+};
+pub use launch::{
+    LaunchOptions, LaunchedInstance, WakeMode, ensure_runtime, inherit_credentials,
+    launch_instance, socket_accepts, user_app_config_dir, user_mona_home, wait_for_socket,
+};
+pub use ssh::SshConnectOptions;
+#[cfg(unix)]
+pub use ssh::{SharedSshTransport, WeakSharedSshTransport};
+pub use structured::{
+    RunStructuredError, RunStructuredOptions, StructuredEventCallback, StructuredOutputAttempt,
+    StructuredOutputError, StructuredOutputSchema, StructuredSchemaError, StructuredTurnResult,
+    StructuredValidationIssue,
+};
+
+/// The protocol types, re-exported so a client needs one dependency, not two.
+pub use mona_harness_api as api;
+pub use mona_harness_api::{
+    ApiEvent, ApiRequest, HistoryMessage, ModelRouteInfo, PermissionDecision, RenderedImage,
+    RenderedImageAnchor, RenderedImageSource, ResponseStats, SessionInfo, SidePanelPage,
+    SidePanelPageFormat, SidePanelPageSource, SidePanelSnapshot, TextMatch, api_socket_path,
+};
+pub use mona_harness_api::{ModelUsage, compare_model_usage};

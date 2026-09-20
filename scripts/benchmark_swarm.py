@@ -14,7 +14,7 @@ Usage:
 
 Environment:
     Requires jcode server running with debug_control enabled:
-        touch ~/.jcode/debug_control
+        touch ~/.mona/debug_control
         jcode serve
 """
 
@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-DEBUG_SOCKET = f"/run/user/{os.getuid()}/jcode-debug.sock"
+DEBUG_SOCKET = f"/run/user/{os.getuid()}/mona-debug.sock"
 MAIN_SOCKET = f"/run/user/{os.getuid()}/jcode.sock"
 TAKEHOME_SOURCE = os.environ.get(
     "TAKEHOME_SOURCE", str(Path.home() / "original_performance_takehome")
@@ -542,7 +542,7 @@ def main():
     if not os.path.exists(DEBUG_SOCKET):
         print(f"Error: Debug socket not found: {DEBUG_SOCKET}")
         print("Make sure jcode server is running with debug_control enabled:")
-        print("  touch ~/.jcode/debug_control")
+        print("  touch ~/.mona/debug_control")
         print("  jcode serve")
         sys.exit(1)
 

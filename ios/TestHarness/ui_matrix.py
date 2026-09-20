@@ -161,7 +161,7 @@ def seed_and_launch(device, collect_perf=True):
     ).stdout.strip()
     appsup = Path(container) / "Library/Application Support"
     appsup.mkdir(parents=True, exist_ok=True)
-    (appsup / "jcode-servers.json").write_text(CRED + "\n")
+    (appsup / "mona-servers.json").write_text(CRED + "\n")
 
     runtime = {}
     t0 = time.monotonic()
@@ -289,7 +289,7 @@ def main():
     ap.add_argument("--no-perf", action="store_true",
                     help="skip runtime (launch/first-frame) measurement")
     ap.add_argument("--out", default=str(Path(os.environ.get("TMPDIR", "/tmp"))
-                                         / "jcode-ui-matrix"))
+                                         / "mona-ui-matrix"))
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--baseline-json")
     ap.add_argument("--candidate-json")

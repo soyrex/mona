@@ -18,34 +18,34 @@ code should live in small crates with one-way dependencies.
 4. Keep heavy optional dependencies behind crates/features. Embeddings, PDF,
    desktop/mobile, browser, and image/render pipelines should remain isolated.
 5. Preserve compatibility facades during migration. `crate::storage::*` can
-   re-export `jcode-storage::*` while callers move gradually.
+   re-export `mona-storage::*` while callers move gradually.
 
 ## Current first step
 
-`jcode-storage` is now a leaf crate for app paths, permission hardening, atomic
+`mona-storage` is now a leaf crate for app paths, permission hardening, atomic
 JSON writes, and append-only JSONL helpers. The root `src/storage.rs` module is a
 thin compatibility facade that preserves existing logging behavior for backup
 recovery.
 
 Measured after extraction on this machine:
 
-- `cargo check -p jcode-storage`: ~0.9s after initial dependencies were built.
+- `cargo check -p mona-storage`: ~0.9s after initial dependencies were built.
 - `cargo check -p jcode --lib`: ~14s in the current warm-cache state.
 
 ## Recommended next extractions
 
-1. `jcode-provider-anthropic`: move Anthropic request/stream translation out of
-   root `src/provider/anthropic.rs` and depend only on `jcode-provider-core`,
-   `jcode-message-types`, and serde/reqwest primitives.
-2. `jcode-provider-openai`: same for OpenAI request/stream handling. This
+1. `mona-provider-anthropic`: move Anthropic request/stream translation out of
+   root `src/provider/anthropic.rs` and depend only on `mona-provider-core`,
+   `mona-message-types`, and serde/reqwest primitives.
+2. `mona-provider-openai`: same for OpenAI request/stream handling. This
    reduces rebuilds when editing server/TUI code and makes provider tests cheap.
-3. `jcode-session-core`: move session storage paths, journal metadata, and
+3. `mona-session-core`: move session storage paths, journal metadata, and
    memory-profile pure transforms once dependencies on root prompt/logging are
    cut behind callbacks.
-4. `jcode-tui-app-state`: split key/input/navigation state transitions from
-   rendering. Keep ratatui rendering in `jcode-tui-render`/root while state tests
+4. `mona-tui-app-state`: split key/input/navigation state transitions from
+   rendering. Keep ratatui rendering in `mona-tui-render`/root while state tests
    compile without the whole root crate.
-5. `jcode-server-protocol-runtime`: split websocket/client event fanout glue from
+5. `mona-server-protocol-runtime`: split websocket/client event fanout glue from
    agent execution so server tests do not rebuild TUI/provider internals.
 
 ## Anti-patterns to avoid

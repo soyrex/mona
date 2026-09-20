@@ -2,7 +2,7 @@
 
 Status: Analysis + proposed plan
 
-This document audits the `TuiState` trait (`crates/jcode-tui/src/tui/mod.rs`) and
+This document audits the `TuiState` trait (`crates/mona-tui/src/tui/mod.rs`) and
 proposes a safe, incremental decomposition. It is the Phase 1.5 follow-on to the
 `App` god-object decomposition (see `CLIENT_CORE_PRESENTATION_SPLIT_PLAN.md`).
 
@@ -137,7 +137,7 @@ Do **not** split all 15 sub-traits at once across 29 files. Recommended order:
    comments, single file). Gives the categorization a canonical home.
 2. Extract one leaf sub-trait with a single-file consumer as a proof of pattern
    (e.g. `TuiCopySelectionState` or `TuiDiagramPaneState`). Verify with
-   `cargo check -p jcode-tui`.
+   `cargo check -p mona-tui`.
 3. Extract remaining leaf sub-traits one per commit, narrowing the corresponding
    leaf render module's bound in the same commit.
 4. Keep `ui.rs` and `ui_viewport.rs` on the `TuiState` supertrait throughout.
@@ -148,9 +148,9 @@ big-bang conflict.
 
 ## Verification
 
-- `cargo check -p jcode-tui` after each sub-trait extraction (TMPDIR must point
+- `cargo check -p mona-tui` after each sub-trait extraction (TMPDIR must point
   at real disk, not the RAM-backed tmpfs, or ring/aws-lc-sys build scripts fail
   with "Disk quota exceeded").
-- `cargo test -p jcode-tui --lib` once at the end. Note: the lib test suite has
+- `cargo test -p mona-tui --lib` once at the end. Note: the lib test suite has
   pre-existing flaky parallel-order failures unrelated to this trait (verify any
   failing test in isolation with `--test-threads=1`).

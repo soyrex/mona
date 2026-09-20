@@ -61,7 +61,7 @@ pub(crate) async fn run(args: Args) -> Result<()> {
 #[cfg(unix)]
 async fn run_unix(args: Args) -> Result<()> {
     let host = args.ssh.as_deref().expect("SSH dispatch requires a host");
-    let binary = args.ssh_binary.as_deref().unwrap_or("jcode");
+    let binary = args.ssh_binary.as_deref().unwrap_or("mona");
     super::output::stderr_info(format!("Connecting local Jcode UI to {host} over SSH..."));
     let mut connection = super::ssh_transport::NativeSsh::connect_with_workspace(
         host,
@@ -71,13 +71,13 @@ async fn run_unix(args: Args) -> Result<()> {
     )
     .await?;
     let working_dir = connection.remote_working_dir().to_owned();
-    crate::env::set_var("JCODE_SSH_REMOTE", host);
-    crate::env::set_var("JCODE_SSH_BINARY", binary);
-    crate::env::set_var("JCODE_SSH_WORKING_DIR", &working_dir);
+    crate::env::set_var("MONA_SSH_REMOTE", host);
+    crate::env::set_var("MONA_SSH_BINARY", binary);
+    crate::env::set_var("MONA_SSH_WORKING_DIR", &working_dir);
     if let Some(socket) = args.ssh_server_socket.as_deref() {
-        crate::env::set_var("JCODE_SSH_SERVER_SOCKET", socket);
+        crate::env::set_var("MONA_SSH_SERVER_SOCKET", socket);
     } else {
-        crate::env::remove_var("JCODE_SSH_SERVER_SOCKET");
+        crate::env::remove_var("MONA_SSH_SERVER_SOCKET");
     }
     if matches!(args.command, Some(Command::SelfDev { .. })) {
         crate::env::set_var(super::selfdev::CLIENT_SELFDEV_ENV, "1");
@@ -124,12 +124,12 @@ fn quote(value: &str) -> String {
 
 /// Return a remote-aware resume command, never a local session lookup.
 pub(crate) fn resume_hint(session_id: &str) -> Option<String> {
-    let host = std::env::var("JCODE_SSH_REMOTE").ok()?;
-    let mut args = vec!["jcode".to_string(), "--ssh".to_string(), quote(&host)];
+    let host = std::env::var("MONA_SSH_REMOTE").ok()?;
+    let mut args = vec!["mona".to_string(), "--ssh".to_string(), quote(&host)];
     for (flag, variable) in [
-        ("--ssh-binary", "JCODE_SSH_BINARY"),
-        ("--ssh-server-socket", "JCODE_SSH_SERVER_SOCKET"),
-        ("--remote-working-dir", "JCODE_SSH_WORKING_DIR"),
+        ("--ssh-binary", "MONA_SSH_BINARY"),
+        ("--ssh-server-socket", "MONA_SSH_SERVER_SOCKET"),
+        ("--remote-working-dir", "MONA_SSH_WORKING_DIR"),
     ] {
         if let Ok(value) = std::env::var(variable) {
             args.extend([flag.to_owned(), quote(&value)]);
@@ -150,9 +150,9 @@ mod tests {
     #[test]
     fn remote_modes_accept_explicit_remote_ids_without_local_lookup() {
         for argv in [
-            vec!["jcode", "--ssh", "dev"],
+            vec!["mona", "--ssh", "dev"],
             vec![
-                "jcode",
+                "mona",
                 "--ssh",
                 "dev",
                 "--resume",
@@ -174,7 +174,7 @@ mod tests {
             vec!["--onboarding-sim"],
             vec!["--tools", "bash"],
         ] {
-            let mut argv = vec!["jcode", "--ssh", "dev"];
+            let mut argv = vec!["mona", "--ssh", "dev"];
             argv.extend(tail);
             assert!(validate(&Args::try_parse_from(argv).unwrap()).is_err());
         }
@@ -184,18 +184,18 @@ mod tests {
     fn resume_hint_retains_remote_identity_and_quotes_paths() {
         let _lock = crate::storage::lock_test_env();
         let names = [
-            "JCODE_SSH_REMOTE",
-            "JCODE_SSH_BINARY",
-            "JCODE_SSH_WORKING_DIR",
-            "JCODE_SSH_SERVER_SOCKET",
+            "MONA_SSH_REMOTE",
+            "MONA_SSH_BINARY",
+            "MONA_SSH_WORKING_DIR",
+            "MONA_SSH_SERVER_SOCKET",
             super::super::selfdev::CLIENT_SELFDEV_ENV,
         ];
         let previous: Vec<_> = names.iter().map(std::env::var_os).collect();
         for name in names {
             crate::env::remove_var(name);
         }
-        crate::env::set_var("JCODE_SSH_REMOTE", "dev");
-        crate::env::set_var("JCODE_SSH_WORKING_DIR", "/srv/sam's repo");
+        crate::env::set_var("MONA_SSH_REMOTE", "dev");
+        crate::env::set_var("MONA_SSH_WORKING_DIR", "/srv/sam's repo");
         let hint = resume_hint("session_remote_1").unwrap();
         assert!(hint.contains("--ssh 'dev'"));
         assert!(hint.contains("'/srv/sam'\\''s repo'"));

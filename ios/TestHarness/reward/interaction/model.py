@@ -7,7 +7,7 @@ the pieces can be built and tested independently and in parallel.
 
 Concept
 -------
-We model a jcode-mobile user as a weighted directed graph (a Markov chain over
+We model a mona-mobile user as a weighted directed graph (a Markov chain over
 UI states). Nodes are UI states the user can be in; edges are actions with a
 relative `weight` = how likely a user in that state is to take that action.
 Normalizing the out-edges of a state gives transition probabilities. The

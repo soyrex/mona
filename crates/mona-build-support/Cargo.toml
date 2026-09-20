@@ -1,0 +1,18 @@
+[package]
+name = "mona-build-support"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+mona-core = { path = "../mona-core" }
+mona-selfdev-types = { path = "../mona-selfdev-types" }
+mona-storage = { path = "../mona-storage" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[dev-dependencies]
+tempfile = "3"

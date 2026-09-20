@@ -9,7 +9,7 @@
   ],
   "improvements": [
     "New jcode --onboarding-sim flag launches the onboarding simulator directly for previewing screens in any terminal",
-    "Onboarding pills render cleanly in ghostty, Apple Terminal, and VS Code by falling back to half-block end caps, with JCODE_ROUNDED_PILLS to override",
+    "Onboarding pills render cleanly in ghostty, Apple Terminal, and VS Code by falling back to half-block end caps, with MONA_ROUNDED_PILLS to override",
     "Tool discovery requests now report where they originated for better transparency",
     "Aborting a bash tool now kills the whole background process group instead of leaving orphans",
     "Releases build and publish each platform independently, so one platform's failure no longer blocks the others"

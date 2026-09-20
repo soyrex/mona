@@ -14,8 +14,8 @@ The workspace already has many crates, but the critical path is dominated by a s
 
 ```mermaid
 graph LR
-    base["jcode-base\n~100k+ LOC"] --> appcore["jcode-app-core\n~100k LOC"]
-    appcore --> tui["jcode-tui\n~100k+ LOC"]
+    base["mona-base\n~100k+ LOC"] --> appcore["mona-app-core\n~100k LOC"]
+    appcore --> tui["mona-tui\n~100k+ LOC"]
     tui --> rootlib["jcode lib"]
     rootlib --> bin["jcode bin"]
     small["50+ smaller crates"] -. mostly parallel .-> base
@@ -32,9 +32,9 @@ Slowest units from that timing report:
 
 | Unit | Total | Frontend | Codegen |
 |---|---:|---:|---:|
-| `jcode-app-core` | 4.73s | 3.82s | 0.91s |
-| `jcode-base` | 4.34s | 3.63s | 0.71s |
-| `jcode-tui` | 4.18s | 3.14s | 1.04s |
+| `mona-app-core` | 4.73s | 3.82s | 0.91s |
+| `mona-base` | 4.34s | 3.63s | 0.71s |
+| `mona-tui` | 4.18s | 3.14s | 1.04s |
 | `jcode` bin | 2.34s | n/a | n/a |
 | `jcode` lib | 1.77s | 1.40s | 0.37s |
 
@@ -46,9 +46,9 @@ Use the focused timing probe for each phase:
 
 ```bash
 scripts/compile_time_probe.sh --json target/compile-time-probe.json
-scripts/compile_time_probe.sh --touch crates/jcode-tui/src/tui/app/input.rs
-scripts/compile_time_probe.sh --touch crates/jcode-app-core/src/server.rs
-scripts/compile_time_probe.sh --touch crates/jcode-base/src/provider/mod.rs
+scripts/compile_time_probe.sh --touch crates/mona-tui/src/tui/app/input.rs
+scripts/compile_time_probe.sh --touch crates/mona-app-core/src/server.rs
+scripts/compile_time_probe.sh --touch crates/mona-base/src/provider/mod.rs
 ```
 
 For broader repeated measurements, continue using:
@@ -62,7 +62,7 @@ Track at least:
 
 1. Full-feature selfdev build wall time.
 2. Cargo timing wall time.
-3. `jcode-base -> jcode-app-core -> jcode-tui -> jcode lib -> jcode bin` stack span.
+3. `mona-base -> mona-app-core -> mona-tui -> jcode lib -> jcode bin` stack span.
 4. Sum of frontend time in the serial stack.
 5. Incremental rebuild after touching representative high-churn files.
 6. Static report drift from `scripts/compile_isolation_report.py`: LOC, inline tests, `async_trait`, and target-state dependency advisories.
@@ -71,27 +71,27 @@ Track at least:
 
 ```mermaid
 graph TD
-    bin["jcode binary\ntiny composition root"] --> cli["jcode-cli"]
-    bin --> tui["jcode-tui"]
-    bin --> server["jcode-server"]
+    bin["jcode binary\ntiny composition root"] --> cli["mona-cli"]
+    bin --> tui["mona-tui"]
+    bin --> server["mona-server"]
     bin --> providers["provider leaf crates"]
     bin --> tools["tool leaf crates"]
 
-    cli --> api["jcode-client-api / app-api"]
+    cli --> api["mona-client-api / app-api"]
     tui --> api
     server --> api
 
     api --> protocol["protocol + view models"]
     protocol --> types["small stable type crates"]
 
-    server --> agent["jcode-agent"]
-    server --> registry["jcode-tool-registry"]
-    server --> auth["jcode-auth-core"]
-    server --> session["jcode-session-core"]
-    server --> memory["jcode-memory-core"]
+    server --> agent["mona-agent"]
+    server --> registry["mona-tool-registry"]
+    server --> auth["mona-auth-core"]
+    server --> session["mona-session-core"]
+    server --> memory["mona-memory-core"]
 
-    providers --> provider_core["jcode-provider-core"]
-    tools --> tool_core["jcode-tool-core"]
+    providers --> provider_core["mona-provider-core"]
+    tools --> tool_core["mona-tool-core"]
 ```
 
 Rules:
@@ -126,18 +126,18 @@ Split the three long-pole crates into sibling domain crates. Priority is widenin
 
 Likely first splits:
 
-- From `jcode-base`:
-  - `jcode-auth-core`
-  - `jcode-session-core`
-  - `jcode-memory-core`
+- From `mona-base`:
+  - `mona-auth-core`
+  - `mona-session-core`
+  - `mona-memory-core`
   - provider implementation crates, especially Bedrock/AWS as a leaf
-- From `jcode-app-core`:
-  - `jcode-server`
-  - `jcode-agent`
-  - `jcode-tool-registry`
+- From `mona-app-core`:
+  - `mona-server`
+  - `mona-agent`
+  - `mona-tool-registry`
   - service crates for background/swarm/update/selfdev as needed
-- From `jcode-tui`:
-  - `jcode-client-api` / view-model boundary first
+- From `mona-tui`:
+  - `mona-client-api` / view-model boundary first
   - then move reusable client-side state logic out of the terminal rendering crate only when it creates a real parallel unit
 
 Success criteria:
@@ -151,9 +151,9 @@ Success criteria:
 Current compatibility layering preserves the old monolith shape:
 
 ```rust
-pub use jcode_base::*;
-pub use jcode_app_core::*;
-pub use jcode_tui::*;
+pub use mona_base::*;
+pub use mona_app_core::*;
+pub use mona_tui::*;
 ```
 
 Migration approach:

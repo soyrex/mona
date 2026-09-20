@@ -70,7 +70,7 @@ async fn harness_socket_frames_tools_reasoning_and_consecutive_assistant_message
         debug_socket.clone(),
     );
     let daemon = tokio::spawn(async move { server.run().await });
-    let bridge = tokio::spawn(jcode_harness_api_server::run_bridge(
+    let bridge = tokio::spawn(mona_harness_api_server::run_bridge(
         api_socket.clone(),
         daemon_socket.clone(),
     ));

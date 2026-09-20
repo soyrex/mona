@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 
-JCODE = os.path.expanduser("~/.jcode/builds/current/jcode")
+JCODE = os.path.expanduser("~/.mona/builds/current/jcode")
 
 SGR_FG_RGB = re.compile(rb"38;2;(\d+);(\d+);(\d+)[;m]")
 SGR_FG_256 = re.compile(rb"\x1b\[38;5;(\d+)m")
@@ -63,7 +63,7 @@ def run_capture(bg: str, seconds: float = 12.0) -> bytes:
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"
-    for k in ("JCODE_THEME", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TMUX", "STY", "SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "WEZTERM_PANE", "ZELLIJ"):
+    for k in ("MONA_THEME", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TMUX", "STY", "SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "WEZTERM_PANE", "ZELLIJ"):
         env.pop(k, None)
     proc = subprocess.Popen(
         [JCODE],

@@ -1,6 +1,6 @@
 # OpenAI-compatible provider `/models` audit
 
-Scope: built-in `OpenAiCompatibleProfile` entries in `crates/jcode-provider-metadata/src/lib.rs`.
+Scope: built-in `OpenAiCompatibleProfile` entries in `crates/mona-provider-metadata/src/lib.rs`.
 
 Legend:
 - `verified data[]`: docs show or explicitly reference OpenAI-compatible `GET /models` shape `{ object: "list", data: [...] }`, or the provider says it implements the OpenAI Models API.
