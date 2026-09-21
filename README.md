@@ -40,7 +40,7 @@ ACP clients (Monitter desktop, mobile, share-web) drive `mona-acp` via stdio JSO
 
 ```sh
 cargo build --release --bin mona --no-default-features
-cargo build --release --bin mona-acp
+cargo build --release -p mona-acp --bin mona-acp
 # Outputs: target/release/mona and target/release/mona-acp.
 ```
 
