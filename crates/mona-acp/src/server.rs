@@ -83,20 +83,36 @@ pub struct ServerState {
 }
 
 #[derive(Default, Clone)]
+struct SessionCounter {
+    turn_count: u32,
+    swaps_count: u32,
+    /// `turn_count` of the most recent successfully applied live route.
+    last_swap_turn: Option<u32>,
+}
+
+#[derive(Default, Clone)]
 struct SessionCounters {
-    /// session_id -> (turn_count, swaps_count)
-    inner: std::collections::HashMap<String, (u32, u32)>,
+    inner: std::collections::HashMap<String, SessionCounter>,
 }
 
 impl SessionCounters {
-    fn get_or_insert(&mut self, id: &str) -> &mut (u32, u32) {
-        self.inner.entry(id.to_string()).or_insert((0, 0))
+    fn get_or_insert(&mut self, id: &str) -> &mut SessionCounter {
+        self.inner.entry(id.to_string()).or_default()
     }
     fn record_swap(&mut self, id: &str) {
-        let entry = self.inner.entry(id.to_string()).or_insert((0, 0));
-        entry.1 += 1;
+        let entry = self.get_or_insert(id);
+        entry.swaps_count += 1;
+        entry.last_swap_turn = Some(entry.turn_count);
     }
-    #[allow(dead_code)] // kept for future use when session/cancel is wired
+    fn cooldown_active(&self, id: &str, minimum_turns: u32) -> bool {
+        let Some(counter) = self.inner.get(id) else {
+            return false;
+        };
+        let Some(last_swap_turn) = counter.last_swap_turn else {
+            return false;
+        };
+        counter.turn_count.saturating_sub(last_swap_turn) < minimum_turns.max(1)
+    }
     fn remove(&mut self, id: &str) {
         self.inner.remove(id);
     }
@@ -564,6 +580,7 @@ async fn handle_session_prompt(
     inflight.insert(session_id.clone(), cancellation.clone());
     drop(inflight);
     if cancellation.is_cancelled() {
+        state.inflight_turns.lock().await.remove(&session_id);
         return jsonrpc_error(id, -32800, "session prompt cancelled");
     }
 
@@ -571,18 +588,24 @@ async fn handle_session_prompt(
     //    permission_required before we touch the provider.
     let (turn_count_for_routing, swaps_in_session) = {
         let counters = state.session_counters.lock().await;
-        let entry = counters.inner.get(&session_id).copied().unwrap_or((0, 0));
-        (entry.0, entry.1)
+        let entry = counters.inner.get(&session_id).cloned().unwrap_or_default();
+        (entry.turn_count, entry.swaps_count)
     };
     {
         let mut counters = state.session_counters.lock().await;
-        counters.get_or_insert(&session_id).0 += 1;
+        counters.get_or_insert(&session_id).turn_count += 1;
     }
     let context = state
         .sessions
         .routing_context(&session_id)
         .unwrap_or_default();
     let policy = *state.policy.lock().await;
+    let cooldown_active = policy == JevRoutePolicy::SafeAuto
+        && state
+            .session_counters
+            .lock()
+            .await
+            .cooldown_active(&session_id, state.router_config.min_turns_between_swaps);
     let mut decision = if policy == JevRoutePolicy::Off {
         skipped_routing_decision(&session, &text, "Jev routing policy is off")
     } else {
@@ -601,7 +624,7 @@ async fn handle_session_prompt(
             context.recent_messages,
             context.last_turn_outcome,
             cached,
-            policy == JevRoutePolicy::SafeAuto,
+            cooldown_active,
             &state.router_config,
             &state.home_dir,
         )
@@ -1712,6 +1735,52 @@ mod tests {
         }
     }
 
+    /// A provider whose first stream never yields. This lets the cancellation
+    /// regression prove that we drop a genuinely blocked stream rather than
+    /// merely noticing cancellation between already-buffered events.
+    struct BlockingProvider {
+        started: Arc<tokio::sync::Notify>,
+        calls: std::sync::atomic::AtomicUsize,
+        model: String,
+    }
+
+    impl BlockingProvider {
+        fn new(model: &str) -> Self {
+            Self {
+                started: Arc::new(tokio::sync::Notify::new()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                model: model.to_string(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Provider for BlockingProvider {
+        async fn complete(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> Result<EventStream> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.started.notify_waiters();
+            Ok(Box::pin(futures::stream::pending::<Result<StreamEvent>>()))
+        }
+
+        fn name(&self) -> &str {
+            "blocked-mock"
+        }
+
+        fn model(&self) -> String {
+            self.model.clone()
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self::new(&self.model))
+        }
+    }
+
     fn shared_writer() -> (SharedWriter, Arc<AsyncMutex<Vec<u8>>>) {
         let buf = Arc::new(AsyncMutex::new(Vec::new()));
         let writer: SharedWriter =
@@ -1772,6 +1841,76 @@ mod tests {
             provider_kind: SupportedProvider::Codex,
         };
         (provider, handle)
+    }
+
+    #[test]
+    fn safe_auto_cooldown_counts_from_last_successful_swap() {
+        let mut counters = SessionCounters::default();
+        let entry = counters.get_or_insert("session");
+        entry.turn_count = 5;
+        counters.record_swap("session");
+        assert!(counters.cooldown_active("session", 2));
+
+        counters.get_or_insert("session").turn_count = 6;
+        assert!(counters.cooldown_active("session", 2));
+
+        counters.get_or_insert("session").turn_count = 7;
+        assert!(!counters.cooldown_active("session", 2));
+    }
+
+    #[tokio::test]
+    async fn session_cancel_interrupts_blocked_stream_without_later_activity() {
+        let home = std::env::temp_dir().join(format!("mona-acp-cancel-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let state = ServerState::new(home.clone(), Arc::new(mona_jev::MockJevClassifier::new()));
+        let session = state
+            .sessions
+            .new_session("codex", None, None, None, &AuthRegistry::default())
+            .expect("synthetic session");
+        let cancellation = CancellationToken::new();
+        state
+            .inflight_turns
+            .lock()
+            .await
+            .insert(session.id.clone(), cancellation.clone());
+
+        let provider = Arc::new(BlockingProvider::new("gpt-5.5"));
+        let handle = ProviderHandle {
+            provider: provider.clone(),
+            auth: None,
+            provider_kind: SupportedProvider::Codex,
+        };
+        let (writer, output) = shared_writer();
+        // Register the waiter before opening the stream so Notify cannot miss
+        // the provider's synchronous "started" transition.
+        let started = provider.started.clone().notified_owned();
+        let cancel = async {
+            started.await;
+            let response =
+                handle_session_cancel(json!(99), &json!({ "sessionId": session.id }), &state).await;
+            assert_eq!(response["result"]["cancelled"], true);
+            assert_eq!(response["result"]["interrupted"], true);
+        };
+        let tools = mona_acp_tools::default_registry();
+        let cwd = PathBuf::from("/tmp");
+        let stream = drive_provider_stream_with_cancellation(
+            &handle,
+            &tools,
+            &cwd,
+            vec![Message::user("block")],
+            &writer,
+            &session.id,
+            &AlwaysAllow,
+            &cancellation,
+        );
+        let (result, ()) = tokio::join!(stream, cancel);
+
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert!(read_lines(output).await.is_empty());
+        assert!(state.inflight_turns.lock().await.get(&session.id).is_none());
+        assert!(state.sessions.get(&session.id).is_none());
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[tokio::test]

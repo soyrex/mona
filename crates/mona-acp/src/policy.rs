@@ -19,7 +19,9 @@ pub enum JevRoutePolicy {
     /// Classify and apply. Never widen permission tier. (Phase 2 default.)
     #[default]
     SafeAuto,
-    /// Classify and apply on every turn, no safety gate (advanced).
+    /// Classify and consider application on every turn. Confidence,
+    /// sensitivity, permission, and swap-budget safety gates still apply;
+    /// only SafeAuto's swap cooldown is bypassed.
     PerTurn,
 }
 

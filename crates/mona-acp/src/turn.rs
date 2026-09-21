@@ -136,6 +136,11 @@ pub async fn run_turn_with_jev(
     config: &RouterConfig,
     _home_dir: &std::path::Path,
 ) -> Result<TurnRoutingDecision> {
+    // Compatibility entry point for embedders that only have a total turn
+    // count. The ACP server supplies the more accurate per-session value
+    // based on the last successful live swap.
+    let cooldown_active =
+        turn_count > 0 && (turn_count % config.min_turns_between_swaps.max(1) != 0);
     run_turn_with_jev_context(
         classifier,
         session,
@@ -145,7 +150,7 @@ pub async fn run_turn_with_jev(
         Vec::new(),
         last_turn_outcome,
         None,
-        true,
+        cooldown_active,
         config,
         _home_dir,
     )
@@ -165,7 +170,7 @@ pub async fn run_turn_with_jev_context(
     recent_messages: Vec<JevMessage>,
     last_turn_outcome: Option<JevTurnOutcome>,
     cached_plan: Option<JevRoutePlan>,
-    enforce_cooldown: bool,
+    cooldown_active: bool,
     config: &RouterConfig,
     _home_dir: &std::path::Path,
 ) -> Result<TurnRoutingDecision> {
@@ -222,9 +227,6 @@ pub async fn run_turn_with_jev_context(
     };
 
     // 3. Apply safety gates
-    let cooldown_active = enforce_cooldown
-        && (turn_count > 0)
-        && ((turn_count % config.min_turns_between_swaps.max(1)) != 0);
     let safety_config = SafetyConfig {
         confidence_floor: config.confidence_floor,
         max_permission_tier_widening: PermissionTier::Read, // never widen
