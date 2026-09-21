@@ -182,7 +182,7 @@ fn handle_initialize(id: Value, _params: &Value, state: &ServerState) -> Value {
 }
 
 async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> Value {
-    let provider = params
+    let provider_str = params
         .get("provider")
         .and_then(Value::as_str)
         .unwrap_or("auto");
@@ -193,7 +193,20 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    match state.sessions.new_session(provider, model, effort, working_dir, &state.auth) {
+    let provider = match crate::provider_whitelist::parse_provider_with_default(
+        provider_str,
+        &state.auth,
+    ) {
+        Ok(p) => p,
+        Err(e) => return jsonrpc_error(id, -32602, &format!("{e}")),
+    };
+    // Reuse the provider_str for the existing SessionRegistry call. The
+    // registry also calls parse_provider; if it errors with "auto", we
+    // catch that above and never reach here.
+    match state
+        .sessions
+        .new_session(provider.as_str(), model, effort, working_dir, &state.auth)
+    {
         Ok(session) => {
             info!(session_id = %session.id, provider = %session.provider.as_str(),
                   model = %session.model, "created session");
@@ -341,10 +354,11 @@ async fn handle_session_prompt(
         Some(s) => s.to_string(),
         None => return jsonrpc_error(id, -32602, "missing sessionId"),
     };
-    let text = params
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    // Standard ACP `session/prompt` uses `prompt` as an array of content
+    // blocks. mona-acp's own smoke harness used a flat `text` string.
+    // Accept both shapes so real ACP clients (Monitter, OpenCode ACP
+    // bridge, ...) work without a custom envelope.
+    let text = extract_prompt_text(params);
 
     let mut session = match state.sessions.get(&session_id) {
         Some(s) => s,
@@ -365,7 +379,7 @@ async fn handle_session_prompt(
     let decision = match run_turn_with_jev(
         state.classifier.clone(),
         &mut session,
-        text,
+        &text,
         turn_count_for_routing,
         swaps_in_session,
         None, // last_turn_outcome — populated once we have a real Agent loop
@@ -427,7 +441,7 @@ async fn handle_session_prompt(
     //    maps its outcome back to a JSON-RPC response.
     let outcome = match drive_provider_stream(
         &handle,
-        vec![Message::user(text)],
+        vec![Message::user(&text)],
         &writer,
         &session_id,
     )
@@ -782,6 +796,35 @@ fn jsonrpc_error(id: Value, code: i64, message: &str) -> Value {
         "id": id,
         "error": { "code": code, "message": message }
     })
+}
+
+/// Extract the user prompt text from a `session/prompt` payload. Standard
+/// ACP uses `prompt: [{type:"text", text:"..."}]`; older clients and
+/// mona-acp's own smoke harness used a flat `text: "..."`. Both shapes
+/// are accepted here. Empty string if neither shape is present.
+fn extract_prompt_text(params: &Value) -> String {
+    // Preferred: standard ACP `prompt` array. Take the first text block.
+    if let Some(arr) = params.get("prompt").and_then(Value::as_array) {
+        for block in arr {
+            if let Some(obj) = block.as_object() {
+                let kind = obj.get("type").and_then(Value::as_str).unwrap_or("");
+                if kind == "text" {
+                    if let Some(text) = obj.get("text").and_then(Value::as_str) {
+                        return text.to_string();
+                    }
+                }
+            }
+        }
+        // No text block found; return the JSON serialization so the
+        // user at least sees what mona-acp got instead of silently
+        // dropping it.
+        return serde_json::to_string(arr).unwrap_or_default();
+    }
+    // Legacy: mona-acp's flat `text` string.
+    if let Some(text) = params.get("text").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    String::new()
 }
 
 #[cfg(test)]

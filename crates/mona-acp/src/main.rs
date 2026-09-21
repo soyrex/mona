@@ -36,6 +36,11 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| EnvFilter::new("mona_acp=info,warn")),
         )
         .with_target(false)
+        // CRITICAL: mona-acp writes JSON-RPC frames to stdout. Any log
+        // line on stdout corrupts the wire stream and breaks clients
+        // (Monitter's acp_runtime parser, fixture tests, our smoke).
+        // Always send tracing output to stderr.
+        .with_writer(std::io::stderr)
         .init();
 
     let home = home_dir();

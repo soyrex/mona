@@ -63,8 +63,17 @@ pub enum ProviderError {
 /// Parse a provider string into a `SupportedProvider`. Accepts aliases:
 /// `openai` and `gpt-*` map to `Codex`; `anthropic` and `sonnet*|opus*|haiku*`
 /// map to `Claude`; the rest map to `Minimax`.
+///
+/// `"auto"` is the standard ACP form for "the harness picks". mona-acp
+/// treats `auto` as an unresolved provider so the caller can substitute the
+/// first configured provider via `parse_provider_with_default`.
 pub fn parse_provider(s: &str) -> Result<SupportedProvider, ProviderError> {
     let normalized = s.trim().to_ascii_lowercase();
+    if normalized == "auto" {
+        return Err(ProviderError::Unsupported {
+            requested: "auto".to_string(),
+        });
+    }
     match normalized.as_str() {
         "codex" | "openai" | "gpt-5" | "gpt-5.5" | "gpt-5.4" => Ok(SupportedProvider::Codex),
         "claude" | "anthropic" => Ok(SupportedProvider::Claude),
@@ -77,6 +86,32 @@ pub fn parse_provider(s: &str) -> Result<SupportedProvider, ProviderError> {
             requested: other.to_string(),
         }),
     }
+}
+
+/// Like `parse_provider`, but if the caller passed `"auto"` or no provider
+/// at all (empty string), pick the first provider that has configured auth
+/// in `auth_registry`. Order is the canonical Phase 2 ordering
+/// (codex → claude → minimax), so when multiple providers are configured
+/// the same one is always chosen.
+pub fn parse_provider_with_default(
+    s: &str,
+    auth_registry: &crate::auth::AuthRegistry,
+) -> Result<SupportedProvider, ProviderError> {
+    if s.trim().is_empty() || s.trim().eq_ignore_ascii_case("auto") {
+        for candidate in [
+            SupportedProvider::Codex,
+            SupportedProvider::Claude,
+            SupportedProvider::Minimax,
+        ] {
+            if auth_registry.has_auth(candidate) {
+                return Ok(candidate);
+            }
+        }
+        return Err(ProviderError::Unsupported {
+            requested: "auto (no provider has configured auth)".to_string(),
+        });
+    }
+    parse_provider(s)
 }
 
 #[cfg(test)]
