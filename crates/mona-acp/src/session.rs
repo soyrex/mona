@@ -2,14 +2,96 @@
 //! `session/list`. Real session state in Phase 2; full `session/prompt`
 //! driving `Agent::run_turn` lands in Phase 2.5.
 
+use mona_jev::{JevMessage, JevRole, JevTurnOutcome};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::auth::AuthRegistry;
 use crate::provider::{ProviderHandle, build_provider_with_model};
 use crate::provider_whitelist::{SupportedProvider, parse_provider};
+
+/// Keep enough context for the next Jev routing decision without turning the
+/// session store into an unbounded transcript archive.
+pub const MAX_RECENT_MESSAGES: usize = 8;
+/// A single message must not make a durable record unexpectedly large.
+pub const MAX_CONTEXT_MESSAGE_CHARS: usize = 8 * 1024;
+
+/// Bounded context carried across a process restart for routing only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRoutingContext {
+    #[serde(default)]
+    pub recent_messages: Vec<JevMessage>,
+    #[serde(default)]
+    pub last_turn_outcome: Option<JevTurnOutcome>,
+}
+
+#[derive(Default)]
+struct RegistryState {
+    sessions: HashMap<String, Session>,
+    contexts: HashMap<String, SessionRoutingContext>,
+}
+
+/// On-disk representation deliberately excludes `ProviderHandle` and `Auth`.
+/// Credentials are loaded only from [`AuthRegistry`] when a caller explicitly
+/// resumes a session.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableSessionFile {
+    version: u8,
+    sessions: Vec<DurableSession>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableSession {
+    id: String,
+    provider: SupportedProvider,
+    model: String,
+    effort: String,
+    working_dir: Option<String>,
+    created_at: i64,
+    #[serde(default)]
+    context: SessionRoutingContext,
+}
+
+impl From<(&Session, SessionRoutingContext)> for DurableSession {
+    fn from((session, context): (&Session, SessionRoutingContext)) -> Self {
+        Self {
+            id: session.id.clone(),
+            provider: session.provider,
+            model: session.model.clone(),
+            effort: session.effort.clone(),
+            working_dir: session.working_dir.clone(),
+            created_at: session.created_at,
+            context,
+        }
+    }
+}
+
+impl DurableSession {
+    fn into_session(self) -> (Session, SessionRoutingContext) {
+        (
+            Session {
+                id: self.id,
+                provider: self.provider,
+                model: self.model,
+                effort: self.effort,
+                working_dir: self.working_dir,
+                created_at: self.created_at,
+                // A handle is runtime-only. `resume` may rebuild one using
+                // currently available auth, but reload itself never does.
+                handle: None,
+            },
+            self.context,
+        )
+    }
+}
 
 /// One ACP session. Holds a `ProviderHandle` for the per-session
 /// provider + auth state (Phase 3.5+).
@@ -84,12 +166,54 @@ impl Session {
 }
 
 /// Shared session registry. Held behind a Mutex by the server loop.
-#[derive(Clone, Default)]
+///
+/// `Default` remains intentionally in-memory for existing embedders and unit
+/// tests. Use [`SessionRegistry::with_state_dir`] to opt into durable session
+/// metadata.
+#[derive(Clone)]
 pub struct SessionRegistry {
-    inner: Arc<Mutex<HashMap<String, Session>>>,
+    inner: Arc<Mutex<RegistryState>>,
+    state_path: Option<Arc<PathBuf>>,
+}
+
+impl Default for SessionRegistry {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(RegistryState::default())),
+            state_path: None,
+        }
+    }
 }
 
 impl SessionRegistry {
+    /// Open a registry backed by `<state_dir>/sessions.json`.
+    ///
+    /// A corrupt or unsupported state file fails safe: no entries are loaded
+    /// and the original file is left untouched for operator inspection.
+    pub fn with_state_dir(state_dir: impl AsRef<Path>) -> Result<Self, SessionError> {
+        let state_dir = state_dir.as_ref();
+        std::fs::create_dir_all(state_dir).map_err(|e| SessionError::Persistence {
+            operation: "create state directory",
+            source: e,
+        })?;
+        let state_path = state_dir.join("sessions.json");
+        let state = Self::load_state(&state_path)?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(state)),
+            state_path: Some(Arc::new(state_path)),
+        })
+    }
+
+    /// Alias for callers that prefer a constructor-style name.
+    pub fn load_from_state_dir(state_dir: impl AsRef<Path>) -> Result<Self, SessionError> {
+        Self::with_state_dir(state_dir)
+    }
+
+    /// The durable state file when this registry was configured for storage.
+    pub fn state_path(&self) -> Option<&Path> {
+        self.state_path.as_deref().map(PathBuf::as_path)
+    }
+
     pub fn new_session(
         &self,
         provider_str: &str,
@@ -122,26 +246,58 @@ impl SessionRegistry {
             working_dir,
             Some(handle),
         );
-        self.inner
-            .lock()
-            .unwrap()
-            .insert(session.id.clone(), session.clone());
+        let mut inner = self.inner.lock().unwrap();
+        let mut next = RegistryState {
+            sessions: inner.sessions.clone(),
+            contexts: inner.contexts.clone(),
+        };
+        next.sessions.insert(session.id.clone(), session.clone());
+        next.contexts
+            .insert(session.id.clone(), SessionRoutingContext::default());
+        self.persist_state(&next)?;
+        *inner = next;
         Ok(session)
     }
 
     pub fn get(&self, id: &str) -> Option<Session> {
-        self.inner.lock().unwrap().get(id).cloned()
+        self.inner.lock().unwrap().sessions.get(id).cloned()
     }
 
     pub fn cancel(&self, id: &str) -> bool {
-        self.inner.lock().unwrap().remove(id).is_some()
+        self.cancel_result(id).unwrap_or(false)
+    }
+
+    /// Remove a session and its durable metadata. The in-memory entry is only
+    /// removed after the new state has been atomically committed.
+    pub fn cancel_result(&self, id: &str) -> Result<bool, SessionError> {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.sessions.contains_key(id) {
+            return Ok(false);
+        }
+        let mut next = RegistryState {
+            sessions: inner.sessions.clone(),
+            contexts: inner.contexts.clone(),
+        };
+        next.sessions.remove(id);
+        next.contexts.remove(id);
+        self.persist_state(&next)?;
+        *inner = next;
+        Ok(true)
     }
 
     /// Update the model + effort for an existing session. Phase 2.5 calls
     /// this after the per-turn router decides on a new model.
     pub fn update(&self, session: &Session) -> bool {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(existing) = inner.get_mut(&session.id) {
+        if inner.sessions.contains_key(&session.id) {
+            let mut next = RegistryState {
+                sessions: inner.sessions.clone(),
+                contexts: inner.contexts.clone(),
+            };
+            let existing = next
+                .sessions
+                .get_mut(&session.id)
+                .expect("session presence checked above");
             existing.model = session.model.clone();
             existing.effort = session.effort.clone();
             existing.working_dir = session.working_dir.clone();
@@ -149,7 +305,12 @@ impl SessionRegistry {
             // Persist it with the metadata; failed reconfiguration never
             // produces a changed session to pass here.
             existing.handle = session.handle.clone();
-            true
+            if self.persist_state(&next).is_ok() {
+                *inner = next;
+                true
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -164,16 +325,234 @@ impl SessionRegistry {
         effort: &str,
     ) -> Result<Session, SessionError> {
         let mut inner = self.inner.lock().unwrap();
-        let session = inner
+        let mut next = RegistryState {
+            sessions: inner.sessions.clone(),
+            contexts: inner.contexts.clone(),
+        };
+        let session = next
+            .sessions
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound(id.to_owned()))?;
         session.reconfigure_provider(model, effort)?;
-        Ok(session.clone())
+        let result = session.clone();
+        self.persist_state(&next)?;
+        *inner = next;
+        Ok(result)
     }
 
     pub fn list(&self) -> Vec<Session> {
-        self.inner.lock().unwrap().values().cloned().collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .sessions
+            .values()
+            .cloned()
+            .collect()
     }
+
+    /// Rebuild a live provider handle after a durable metadata reload. Auth is
+    /// intentionally required here; reload never reads it from durable state.
+    pub fn resume(&self, id: &str, auth: &AuthRegistry) -> Result<Session, SessionError> {
+        let mut inner = self.inner.lock().unwrap();
+        let session = inner
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_owned()))?;
+        if !auth.has_auth(session.provider) {
+            return Err(SessionError::MissingAuth(session.provider));
+        }
+        let handle = build_provider_with_model(session.provider.as_str(), auth, &session.model)
+            .map_err(|e| SessionError::ProviderBuild(e.to_string()))?
+            .reconfigure(&session.model, &session.effort)
+            .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
+        session.handle = Some(handle);
+        Ok(session.clone())
+    }
+
+    /// Read the bounded routing context belonging to a session.
+    pub fn routing_context(&self, id: &str) -> Option<SessionRoutingContext> {
+        self.inner.lock().unwrap().contexts.get(id).cloned()
+    }
+
+    /// Add a user, assistant, or tool message to the bounded durable context.
+    pub fn record_message(
+        &self,
+        id: &str,
+        role: JevRole,
+        content: impl AsRef<str>,
+    ) -> Result<(), SessionError> {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.sessions.contains_key(id) {
+            return Err(SessionError::NotFound(id.to_owned()));
+        }
+        let mut next = RegistryState {
+            sessions: inner.sessions.clone(),
+            contexts: inner.contexts.clone(),
+        };
+        let context = next.contexts.entry(id.to_owned()).or_default();
+        context.recent_messages.push(JevMessage {
+            role,
+            content: bounded_content(content.as_ref()),
+        });
+        trim_context(context);
+        self.persist_state(&next)?;
+        *inner = next;
+        Ok(())
+    }
+
+    /// Persist the outcome used by the next Jev routing decision.
+    pub fn set_last_turn_outcome(
+        &self,
+        id: &str,
+        outcome: Option<JevTurnOutcome>,
+    ) -> Result<(), SessionError> {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.sessions.contains_key(id) {
+            return Err(SessionError::NotFound(id.to_owned()));
+        }
+        let mut next = RegistryState {
+            sessions: inner.sessions.clone(),
+            contexts: inner.contexts.clone(),
+        };
+        let context = next.contexts.entry(id.to_owned()).or_default();
+        context.last_turn_outcome = outcome;
+        self.persist_state(&next)?;
+        *inner = next;
+        Ok(())
+    }
+
+    fn load_state(state_path: &Path) -> Result<RegistryState, SessionError> {
+        if !state_path.exists() {
+            return Ok(RegistryState::default());
+        }
+        let bytes = std::fs::read(state_path).map_err(|e| SessionError::Persistence {
+            operation: "read durable sessions",
+            source: e,
+        })?;
+        let file: DurableSessionFile = serde_json::from_slice(&bytes)
+            .map_err(|e| SessionError::CorruptState(e.to_string()))?;
+        if file.version != 1 {
+            return Err(SessionError::CorruptState(format!(
+                "unsupported durable session version {}",
+                file.version
+            )));
+        }
+        let mut state = RegistryState::default();
+        for durable in file.sessions {
+            let (session, mut context) = durable.into_session();
+            trim_context(&mut context);
+            if state.sessions.contains_key(&session.id) {
+                return Err(SessionError::CorruptState(format!(
+                    "duplicate durable session id `{}`",
+                    session.id
+                )));
+            }
+            state.contexts.insert(session.id.clone(), context);
+            state.sessions.insert(session.id.clone(), session);
+        }
+        Ok(state)
+    }
+
+    fn persist_state(&self, state: &RegistryState) -> Result<(), SessionError> {
+        let Some(state_path) = &self.state_path else {
+            return Ok(());
+        };
+        let mut sessions: Vec<_> = state
+            .sessions
+            .values()
+            .map(|session| {
+                DurableSession::from((
+                    session,
+                    state.contexts.get(&session.id).cloned().unwrap_or_default(),
+                ))
+            })
+            .collect();
+        sessions.sort_by(|a, b| a.id.cmp(&b.id));
+        let bytes = serde_json::to_vec_pretty(&DurableSessionFile {
+            version: 1,
+            sessions,
+        })
+        .map_err(|e| SessionError::Serialization(e.to_string()))?;
+
+        let state_path = state_path.as_path();
+        let parent = state_path.parent().expect("state file has a parent");
+        let temporary = parent.join(format!(".sessions-{}.tmp", Uuid::new_v4()));
+        let result = (|| -> Result<(), std::io::Error> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(&bytes)?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, state_path)?;
+            File::open(parent)?.sync_all()?;
+            Ok(())
+        })();
+        if let Err(source) = result {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(SessionError::Persistence {
+                operation: "atomically persist durable sessions",
+                source,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn trim_context(context: &mut SessionRoutingContext) {
+    if context.recent_messages.len() > MAX_RECENT_MESSAGES {
+        let excess = context.recent_messages.len() - MAX_RECENT_MESSAGES;
+        context.recent_messages.drain(..excess);
+    }
+    for message in &mut context.recent_messages {
+        message.content = bounded_content(&message.content);
+    }
+}
+
+fn bounded_content(content: &str) -> String {
+    let redacted = redact_sensitive_content(content);
+    let mut chars = redacted.chars();
+    let prefix: String = chars.by_ref().take(MAX_CONTEXT_MESSAGE_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
+/// Conversation and tool output are useful to routing, but values assigned to
+/// common credential fields must never enter the durable session file. This is
+/// intentionally narrow: normal prose (including discussions *about* those
+/// fields) is preserved unless it uses an assignment form.
+fn redact_sensitive_content(content: &str) -> String {
+    content
+        .split_inclusive('\n')
+        .map(redact_sensitive_line)
+        .collect()
+}
+
+fn redact_sensitive_line(line: &str) -> String {
+    const MARKERS: [&str; 4] = ["api_key", "access_token", "refresh_token", "authorization"];
+    let lower = line.to_ascii_lowercase();
+    let Some((start, marker)) = MARKERS
+        .iter()
+        .filter_map(|marker| lower.find(marker).map(|start| (start, *marker)))
+        .min_by_key(|(start, _)| *start)
+    else {
+        return line.to_owned();
+    };
+    let value_start = start + marker.len();
+    let suffix = &line[value_start..];
+    let trimmed = suffix.trim_start_matches([' ', '\t', ':', '=', '"', '\'']);
+    if trimmed.len() == suffix.len() {
+        return line.to_owned();
+    }
+    let prefix_len = line.len() - trimmed.len();
+    let end = trimmed
+        .find(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '}'))
+        .unwrap_or(trimmed.len());
+    format!("{}[redacted]{}", &line[..prefix_len], &trimmed[end..])
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -186,6 +565,18 @@ pub enum SessionError {
     NoProviderHandle,
     #[error("session `{0}` not found")]
     NotFound(String),
+    #[error("no configured auth is available for provider `{0:?}`")]
+    MissingAuth(SupportedProvider),
+    #[error("durable session state is corrupt: {0}")]
+    CorruptState(String),
+    #[error("could not serialize durable session state: {0}")]
+    Serialization(String),
+    #[error("could not {operation}: {source}")]
+    Persistence {
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// JSON-RPC result payload for `session/new` and `session/resume`.
@@ -394,5 +785,165 @@ mod tests {
         r.new_session("claude", None, None, None, &auth).unwrap();
         r.new_session("minimax", None, None, None, &auth).unwrap();
         assert_eq!(r.list().len(), 3);
+    }
+
+    #[test]
+    fn durable_session_round_trip_preserves_metadata_and_routing_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let auth = registry_with_all();
+        let registry = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let session = registry
+            .new_session(
+                "codex",
+                Some("gpt-5.4"),
+                Some("high"),
+                Some("/workspace/project".into()),
+                &auth,
+            )
+            .unwrap();
+        registry
+            .record_message(&session.id, JevRole::User, "inspect this project")
+            .unwrap();
+        registry
+            .record_message(&session.id, JevRole::Tool, "read_file completed")
+            .unwrap();
+        registry
+            .set_last_turn_outcome(
+                &session.id,
+                Some(JevTurnOutcome::Uncertain {
+                    reason: "tool output needs review".into(),
+                }),
+            )
+            .unwrap();
+
+        let reloaded = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let restored = reloaded.get(&session.id).unwrap();
+        assert_eq!(restored.provider, SupportedProvider::Codex);
+        assert_eq!(restored.model, "gpt-5.4");
+        assert_eq!(restored.effort, "high");
+        assert_eq!(restored.working_dir.as_deref(), Some("/workspace/project"));
+        assert!(
+            restored.handle.is_none(),
+            "handles are never restored from disk"
+        );
+        let context = reloaded.routing_context(&session.id).unwrap();
+        assert_eq!(context.recent_messages.len(), 2);
+        assert!(matches!(
+            context.last_turn_outcome,
+            Some(JevTurnOutcome::Uncertain { ref reason }) if reason == "tool output needs review"
+        ));
+    }
+
+    #[test]
+    fn durable_state_does_not_serialize_auth_or_provider_handles() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let auth = registry_with_all();
+        let session = registry
+            .new_session("codex", None, None, None, &auth)
+            .unwrap();
+        registry
+            .record_message(&session.id, JevRole::Assistant, "safe response")
+            .unwrap();
+        registry
+            .record_message(
+                &session.id,
+                JevRole::Tool,
+                "api_key=tool-output-secret-that-must-not-persist",
+            )
+            .unwrap();
+
+        let serialized = std::fs::read_to_string(registry.state_path().unwrap()).unwrap();
+        assert!(!serialized.contains("sk-test-codex-1234"));
+        assert!(!serialized.contains("sk-ant-test-claude-1234"));
+        assert!(!serialized.contains("minimax-test-minimax-1234"));
+        assert!(!serialized.contains("tool-output-secret-that-must-not-persist"));
+        assert!(!serialized.contains("\"handle\""));
+        assert!(!serialized.contains("\"auth\""));
+    }
+
+    #[test]
+    fn durable_reload_requires_current_auth_to_reconstruct_a_handle() {
+        let temp = tempfile::tempdir().unwrap();
+        let auth = registry_with_all();
+        let registry = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let session = registry
+            .new_session("codex", None, None, None, &auth)
+            .unwrap();
+
+        let reloaded = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let error = reloaded
+            .resume(&session.id, &AuthRegistry::default())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SessionError::MissingAuth(SupportedProvider::Codex)
+        ));
+        assert!(reloaded.get(&session.id).unwrap().handle.is_none());
+
+        let resumed = reloaded.resume(&session.id, &auth).unwrap();
+        assert!(resumed.handle.is_some());
+        assert!(resumed.handle.unwrap().auth.is_some());
+    }
+
+    #[test]
+    fn durable_context_is_bounded_by_count_and_message_size() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let session = registry
+            .new_session("codex", None, None, None, &registry_with_all())
+            .unwrap();
+        for index in 0..(MAX_RECENT_MESSAGES + 3) {
+            registry
+                .record_message(&session.id, JevRole::User, format!("message-{index}"))
+                .unwrap();
+        }
+        registry
+            .record_message(
+                &session.id,
+                JevRole::Assistant,
+                "x".repeat(MAX_CONTEXT_MESSAGE_CHARS + 50),
+            )
+            .unwrap();
+
+        let context = registry.routing_context(&session.id).unwrap();
+        assert_eq!(context.recent_messages.len(), MAX_RECENT_MESSAGES);
+        assert_eq!(
+            context.recent_messages.first().unwrap().content,
+            "message-4"
+        );
+        let last = context.recent_messages.last().unwrap();
+        assert_eq!(last.role, JevRole::Assistant);
+        assert_eq!(last.content.chars().count(), MAX_CONTEXT_MESSAGE_CHARS + 1);
+        assert!(last.content.ends_with('…'));
+    }
+
+    #[test]
+    fn corrupt_durable_file_fails_without_overwriting_the_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("sessions.json");
+        let corrupt = b"{ definitely not valid json";
+        std::fs::write(&path, corrupt).unwrap();
+
+        assert!(matches!(
+            SessionRegistry::with_state_dir(temp.path()),
+            Err(SessionError::CorruptState(_))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+    }
+
+    #[test]
+    fn explicit_cancel_removes_the_durable_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let session = registry
+            .new_session("claude", None, None, None, &registry_with_all())
+            .unwrap();
+        assert!(registry.cancel_result(&session.id).unwrap());
+        assert!(registry.get(&session.id).is_none());
+
+        let reloaded = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        assert!(reloaded.get(&session.id).is_none());
+        assert!(reloaded.list().is_empty());
     }
 }
