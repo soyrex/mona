@@ -207,7 +207,7 @@ async fn live_openai_catalog() -> Result<Option<mona_base::provider::OpenAIModel
         return Ok(None);
     }
 
-    let token = openai_access_token(&Arc::new(RwLock::new(creds))).await?;
+    let token = openai_access_token(&Arc::new(RwLock::new(creds)), true).await?;
     Ok(Some(
         mona_base::provider::fetch_openai_model_catalog(&token).await?,
     ))
@@ -363,3 +363,53 @@ fn catalog_credential_identity_survives_token_refresh_but_changes_accounts() {
 include!("openai_tests/persistent_terminal.rs");
 
 include!("openai_tests/persistent_prefix.rs");
+
+#[tokio::test]
+async fn injected_credentials_survive_reload_fork_and_invalidation() {
+    let _guard = mona_base::storage::lock_test_env();
+    let _model = EnvVarGuard::set("MONA_OPENAI_MODEL", "ambient-model");
+    let _mode = EnvVarGuard::set("MONA_OPENAI_CREDENTIAL_MODE", "api_key");
+    let _key = EnvVarGuard::set("OPENAI_API_KEY", "ambient-key");
+    let provider = OpenAIProvider::new_with_credentials_and_model(
+        CodexCredentials {
+            access_token: "injected-access".into(),
+            refresh_token: "injected-refresh".into(),
+            id_token: None,
+            account_id: Some("injected-account".into()),
+            expires_at: Some(i64::MAX),
+        },
+        "gpt-5.4",
+    );
+    assert_eq!(provider.model(), "gpt-5.4");
+    provider.reload_credentials_now();
+    Provider::invalidate_credentials(&provider).await;
+    assert_eq!(
+        provider.credentials.read().await.access_token,
+        "injected-access"
+    );
+    assert_eq!(
+        provider.credentials.read().await.account_id.as_deref(),
+        Some("injected-account")
+    );
+    assert_eq!(provider.fork().model(), "gpt-5.4");
+    assert!(
+        provider
+            .set_credential_mode(OpenAICredentialMode::ApiKey)
+            .is_err()
+    );
+    assert!(
+        openai_stream_runtime::force_refresh_openai_token(
+            &provider.credentials,
+            "injected-refresh",
+            false
+        )
+        .await
+        .is_err()
+    );
+    provider.credentials.write().await.expires_at = Some(1);
+    assert!(
+        openai_access_token(&provider.credentials, false)
+            .await
+            .is_err()
+    );
+}

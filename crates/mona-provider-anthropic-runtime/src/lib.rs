@@ -200,8 +200,10 @@ fn load_official_claude_client_metadata() -> OAuthClientMetadata {
     }
 }
 
-fn oauth_request_metadata(session_id: &str) -> ApiMetadata {
-    let official = load_official_claude_client_metadata();
+fn oauth_request_metadata(session_id: &str, use_official_metadata: bool) -> ApiMetadata {
+    let official = use_official_metadata
+        .then(load_official_claude_client_metadata)
+        .unwrap_or_default();
     let device_id = official.device_id.unwrap_or_else(|| {
         Uuid::new_v5(&Uuid::NAMESPACE_DNS, session_id.as_bytes())
             .simple()
@@ -459,6 +461,37 @@ struct CachedCredentials {
     expires_at: i64,
 }
 
+/// Credentials supplied by the embedding host. OAuth refresh is host-owned.
+#[derive(Clone)]
+pub enum AnthropicCredentials {
+    ApiKey(String),
+    OAuth {
+        access_token: String,
+        refresh_token: String,
+        expires_at_ms: i64,
+    },
+}
+
+impl AnthropicCredentials {
+    fn is_oauth(&self) -> bool {
+        matches!(self, Self::OAuth { .. })
+    }
+    fn oauth_cache(&self) -> Option<CachedCredentials> {
+        match self {
+            Self::OAuth {
+                access_token,
+                refresh_token,
+                expires_at_ms,
+            } => Some(CachedCredentials {
+                access_token: access_token.clone(),
+                refresh_token: refresh_token.clone(),
+                expires_at: *expires_at_ms,
+            }),
+            Self::ApiKey(_) => None,
+        }
+    }
+}
+
 /// Direct Anthropic API provider
 pub struct AnthropicProvider {
     client: Client,
@@ -479,6 +512,7 @@ pub struct AnthropicProvider {
     /// session/profile cannot redirect this runtime to a different process env.
     profile_api_key: Option<std::result::Result<String, String>>,
     profile_models: Option<Vec<String>>,
+    injected_credentials: Option<AnthropicCredentials>,
 }
 
 impl AnthropicProvider {
@@ -583,6 +617,9 @@ impl AnthropicProvider {
         };
         // Persist so the rest of the process benefits from the warm catalog,
         // exactly like the runtime's own prefetch.
+        if self.injected_credentials.is_some() {
+            return Ok(catalog.available_models);
+        }
         mona_base::provider::persist_anthropic_model_catalog(&catalog);
         if !catalog.context_limits.is_empty() {
             mona_base::provider::populate_context_limits(catalog.context_limits.clone());
@@ -639,10 +676,53 @@ impl AnthropicProvider {
             direct_transport,
             profile_api_key,
             profile_models,
+            injected_credentials: None,
         }
     }
 
+    /// Constructs a provider without ambient auth, transport, or usage lookups.
+    pub fn with_credentials(
+        model: impl Into<String>,
+        credentials: AnthropicCredentials,
+    ) -> Result<Self> {
+        let model = model.into();
+        anyhow::ensure!(!model.trim().is_empty(), "Anthropic model is empty");
+        let token = match &credentials {
+            AnthropicCredentials::ApiKey(key) => key,
+            AnthropicCredentials::OAuth { access_token, .. } => access_token,
+        };
+        anyhow::ensure!(!token.trim().is_empty(), "Anthropic credential is empty");
+        let is_oauth = credentials.is_oauth();
+        Ok(Self {
+            client: mona_provider_core::shared_http_client(),
+            model: Arc::new(std::sync::RwLock::new(model)),
+            reasoning_effort: Arc::new(std::sync::RwLock::new(None)),
+            service_tier: Arc::new(std::sync::RwLock::new(None)),
+            credentials: Arc::new(RwLock::new(credentials.oauth_cache())),
+            credential_mode: Arc::new(RwLock::new(if is_oauth {
+                AnthropicCredentialMode::OAuth
+            } else {
+                AnthropicCredentialMode::ApiKey
+            })),
+            max_tokens_override: None,
+            oauth_session_id: Uuid::new_v4().to_string(),
+            oauth_preflight_done: Arc::new(AtomicBool::new(false)),
+            direct_transport: DirectTransportConfig {
+                api_url: API_URL.to_string(),
+                headers: Ok(HeaderMap::new()),
+                auth_mode: "header".to_string(),
+                auth_header: "x-api-key".to_string(),
+            },
+            profile_api_key: None,
+            profile_models: None,
+            injected_credentials: Some(credentials),
+        })
+    }
+
     fn direct_api_key(&self) -> Result<String> {
+        if let Some(AnthropicCredentials::ApiKey(key)) = &self.injected_credentials {
+            return Ok(key.clone());
+        }
         match &self.profile_api_key {
             Some(Ok(key)) => Ok(key.clone()),
             Some(Err(err)) => anyhow::bail!(err.clone()),
@@ -866,9 +946,9 @@ impl AnthropicProvider {
         let effort = self
             .stored_reasoning_effort()
             .or_else(|| Self::default_reasoning_effort_for_model(model));
-        let resolved = effort.as_deref().map(|effort| {
-            mona_base::prompt::swarm_root_reasoning_effort(effort).unwrap_or(effort)
-        });
+        let resolved = effort
+            .as_deref()
+            .map(|effort| mona_base::prompt::swarm_root_reasoning_effort(effort).unwrap_or(effort));
         self.build_reasoning_request_parts_with_effort(model, is_oauth, show_thinking, resolved)
     }
 
@@ -970,6 +1050,11 @@ impl AnthropicProvider {
             }
         }
 
+        anyhow::ensure!(
+            self.injected_credentials.is_none(),
+            "Injected Anthropic OAuth token needs refresh; refresh it in the embedding host"
+        );
+
         // Load fresh credentials or refresh expired ones
         let fresh_creds =
             auth::claude::load_credentials().context("Failed to load Claude credentials")?;
@@ -1000,9 +1085,7 @@ impl AnthropicProvider {
                 );
             }
 
-            mona_base::logging::info(
-                "OAuth token expired or expiring soon, attempting refresh...",
-            );
+            mona_base::logging::info("OAuth token expired or expiring soon, attempting refresh...");
 
             let active_label = auth::claude::active_account_label()
                 .unwrap_or_else(auth::claude::primary_account_label);
@@ -1056,6 +1139,10 @@ impl AnthropicProvider {
     }
 
     pub(crate) fn set_credential_mode(&self, mode: AnthropicCredentialMode) -> Result<()> {
+        anyhow::ensure!(
+            self.injected_credentials.is_none(),
+            "Cannot replace injected Anthropic credentials from ambient auth"
+        );
         match mode {
             AnthropicCredentialMode::Auto => {}
             AnthropicCredentialMode::ApiKey => {
@@ -1180,7 +1267,8 @@ impl Provider for AnthropicProvider {
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
         let (token, is_oauth) = self.get_access_token().await?;
-        if is_oauth {
+        let allow_ambient_oauth = self.injected_credentials.is_none();
+        if is_oauth && allow_ambient_oauth {
             ensure_oauth_preflight(
                 &self.client,
                 &token,
@@ -1216,7 +1304,10 @@ impl Provider for AnthropicProvider {
                 Some(api_tools)
             },
             metadata: if is_oauth {
-                Some(oauth_request_metadata(&self.oauth_session_id))
+                Some(oauth_request_metadata(
+                    &self.oauth_session_id,
+                    allow_ambient_oauth,
+                ))
             } else {
                 None
             },
@@ -1260,6 +1351,7 @@ impl Provider for AnthropicProvider {
                 client,
                 token,
                 is_oauth,
+                allow_ambient_oauth,
                 request,
                 tx,
                 credentials,
@@ -1472,10 +1564,12 @@ impl Provider for AnthropicProvider {
                     mona_base::logging::info(
                         "Anthropic OAuth model catalog auth failed; forcing token refresh and retrying...",
                     );
-                    let refreshed_token =
-                        force_refresh_oauth_token(Arc::clone(&self.credentials)).await?;
-                    mona_base::provider::fetch_anthropic_model_catalog_oauth(&refreshed_token)
-                        .await
+                    let refreshed_token = force_refresh_oauth_token(
+                        Arc::clone(&self.credentials),
+                        self.injected_credentials.is_none(),
+                    )
+                    .await?;
+                    mona_base::provider::fetch_anthropic_model_catalog_oauth(&refreshed_token).await
                 }
                 Err(err) => Err(err),
             }
@@ -1493,6 +1587,9 @@ impl Provider for AnthropicProvider {
                 return Ok(());
             }
         };
+        if self.injected_credentials.is_some() {
+            return Ok(());
+        }
         mona_base::provider::persist_anthropic_model_catalog(&catalog);
         if !catalog.context_limits.is_empty() {
             mona_base::provider::populate_context_limits(catalog.context_limits);
@@ -1526,7 +1623,11 @@ impl Provider for AnthropicProvider {
             )),
             reasoning_effort: Arc::new(std::sync::RwLock::new(self.stored_reasoning_effort())),
             service_tier: Arc::new(std::sync::RwLock::new(self.service_tier())),
-            credentials: Arc::new(RwLock::new(None)),
+            credentials: Arc::new(RwLock::new(
+                self.injected_credentials
+                    .as_ref()
+                    .and_then(AnthropicCredentials::oauth_cache),
+            )),
             credential_mode: Arc::clone(&self.credential_mode),
             max_tokens_override: self.max_tokens_override,
             oauth_session_id: self.oauth_session_id.clone(),
@@ -1536,12 +1637,16 @@ impl Provider for AnthropicProvider {
             direct_transport: self.direct_transport.clone(),
             profile_api_key: self.profile_api_key.clone(),
             profile_models: self.profile_models.clone(),
+            injected_credentials: self.injected_credentials.clone(),
         })
     }
 
     async fn invalidate_credentials(&self) {
         let mut cached = self.credentials.write().await;
-        *cached = None;
+        *cached = self
+            .injected_credentials
+            .as_ref()
+            .and_then(AnthropicCredentials::oauth_cache);
     }
 
     fn native_result_sender(&self) -> Option<NativeToolResultSender> {
@@ -1559,7 +1664,8 @@ impl Provider for AnthropicProvider {
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
         let (token, is_oauth) = self.get_access_token().await?;
-        if is_oauth {
+        let allow_ambient_oauth = self.injected_credentials.is_none();
+        if is_oauth && allow_ambient_oauth {
             ensure_oauth_preflight(
                 &self.client,
                 &token,
@@ -1595,7 +1701,10 @@ impl Provider for AnthropicProvider {
                 Some(api_tools)
             },
             metadata: if is_oauth {
-                Some(oauth_request_metadata(&self.oauth_session_id))
+                Some(oauth_request_metadata(
+                    &self.oauth_session_id,
+                    allow_ambient_oauth,
+                ))
             } else {
                 None
             },
@@ -1638,6 +1747,7 @@ impl Provider for AnthropicProvider {
                 client,
                 token,
                 is_oauth,
+                allow_ambient_oauth,
                 request,
                 tx,
                 credentials,
@@ -1661,6 +1771,7 @@ async fn run_stream_with_retries(
     client: Client,
     initial_token: String,
     is_oauth: bool,
+    allow_oauth_refresh: bool,
     mut request: ApiRequest,
     tx: mpsc::Sender<Result<StreamEvent>>,
     credentials: Arc<RwLock<Option<CachedCredentials>>>,
@@ -1755,7 +1866,9 @@ async fn run_stream_with_retries(
                             phase: mona_message_types::ConnectionPhase::Authenticating,
                         }))
                         .await;
-                    match force_refresh_oauth_token(Arc::clone(&credentials)).await {
+                    match force_refresh_oauth_token(Arc::clone(&credentials), allow_oauth_refresh)
+                        .await
+                    {
                         Ok(refreshed_token) => {
                             mona_base::logging::info(
                                 "Forced OAuth token refresh succeeded, retrying request.",
@@ -1927,7 +2040,12 @@ async fn run_stream_with_retries(
 
 async fn force_refresh_oauth_token(
     credentials: Arc<RwLock<Option<CachedCredentials>>>,
+    allow_ambient_refresh: bool,
 ) -> Result<String> {
+    anyhow::ensure!(
+        allow_ambient_refresh,
+        "Injected Anthropic OAuth credentials require refresh by the embedding host"
+    );
     let refresh_from_cache = {
         let cached = credentials.read().await;
         cached

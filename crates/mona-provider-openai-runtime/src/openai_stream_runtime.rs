@@ -16,6 +16,7 @@ use self::openai_stream_timeout::{
 
 pub(super) async fn openai_access_token(
     credentials: &Arc<RwLock<CodexCredentials>>,
+    allow_oauth_refresh: bool,
 ) -> anyhow::Result<String> {
     let (access_token, refresh_token, needs_refresh) = {
         let tokens = credentials.read().await;
@@ -45,7 +46,7 @@ pub(super) async fn openai_access_token(
         return Ok(access_token);
     }
 
-    force_refresh_openai_token(credentials, &refresh_token).await
+    force_refresh_openai_token(credentials, &refresh_token, allow_oauth_refresh).await
 }
 
 /// Unconditionally refresh the OpenAI access token using the stored refresh
@@ -55,7 +56,12 @@ pub(super) async fn openai_access_token(
 pub(super) async fn force_refresh_openai_token(
     credentials: &Arc<RwLock<CodexCredentials>>,
     refresh_token: &str,
+    allow_oauth_refresh: bool,
 ) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        allow_oauth_refresh,
+        "Injected OpenAI OAuth credentials require refresh by the embedding host"
+    );
     let refreshed = oauth::refresh_openai_tokens(refresh_token).await?;
     let mut tokens = credentials.write().await;
     let account_id = tokens.account_id.clone();
@@ -83,6 +89,7 @@ pub(super) async fn stream_response(
     request: Value,
     initial_status_detail: String,
     tx: mpsc::Sender<Result<StreamEvent>>,
+    allow_oauth_refresh: bool,
 ) -> Result<(), OpenAIStreamFailure> {
     use mona_message_types::ConnectionPhase;
     let request_model = openai_request_model(&request);
@@ -102,7 +109,7 @@ pub(super) async fn stream_response(
     ));
     emit_status_detail(&tx, initial_status_detail).await;
     emit_connection_phase(&tx, ConnectionPhase::Authenticating).await;
-    let access_token = openai_access_token(&credentials).await?;
+    let access_token = openai_access_token(&credentials, allow_oauth_refresh).await?;
     let creds = credentials.read().await;
     // Account switching can race token refresh. Never combine an old bearer
     // with a new account header or attribute that request to the new account.
@@ -215,7 +222,9 @@ pub(super) async fn stream_response(
                 )));
             }
 
-            match force_refresh_openai_token(&credentials, &refresh_token).await {
+            match force_refresh_openai_token(&credentials, &refresh_token, allow_oauth_refresh)
+                .await
+            {
                 Ok(_) => {
                     mona_base::logging::info(
                         "OpenAI access token rejected; refreshed credentials and will retry",
@@ -931,8 +940,7 @@ async fn continue_persistent_ws_locked(
             Ok(WsMessage::Text(text)) => {
                 let text = text.to_string();
                 if !logged_first_server_event {
-                    emit_connection_phase(tx, mona_message_types::ConnectionPhase::Streaming)
-                        .await;
+                    emit_connection_phase(tx, mona_message_types::ConnectionPhase::Streaming).await;
                     mona_base::logging::info(&format!(
                         "Persistent WS first server event after {}ms ({})",
                         stream_started.elapsed().as_millis(),
@@ -1151,6 +1159,7 @@ pub(super) async fn stream_response_websocket_persistent(
     tx: mpsc::Sender<Result<StreamEvent>>,
     persistent_ws: Arc<Mutex<Option<PersistentWsState>>>,
     input_item_count: usize,
+    allow_oauth_refresh: bool,
 ) -> Result<(), OpenAIStreamFailure> {
     use mona_message_types::ConnectionPhase;
     let request_model = request
@@ -1171,7 +1180,7 @@ pub(super) async fn stream_response_websocket_persistent(
         ],
     );
 
-    let access_token = openai_access_token(&credentials).await?;
+    let access_token = openai_access_token(&credentials, allow_oauth_refresh).await?;
     let usage_snapshot = mona_base::usage::get_openai_usage_sync();
     mona_base::logging::info(&format!(
         "OpenAI limit diag: opening fresh persistent WS request usage=({})",

@@ -24,14 +24,7 @@ use std::io::{BufRead, Write};
 use std::process::{Command, Stdio};
 
 fn mona_acp_bin() -> std::path::PathBuf {
-    // The binary lives at target/release/mona-acp relative to the workspace root.
-    let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop(); // pop crates/mona-acp
-    p.pop(); // pop crates
-    p.push("target");
-    p.push("release");
-    p.push("mona-acp");
-    p
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_mona-acp"))
 }
 
 fn send_one(bin: &std::path::Path, frames: &[&str]) -> Vec<Value> {
@@ -270,10 +263,12 @@ fn per_turn_router_fires_on_session_prompt() {
     assert_eq!(prompt_resp["result"]["stopReason"], "phase2.5_routing_done");
     assert_eq!(prompt_resp["result"]["applied"], true);
     assert_eq!(prompt_resp["result"]["tier"], "strong");
-    assert!(prompt_resp["result"]["model"]
-        .as_str()
-        .unwrap()
-        .starts_with("strong:"));
+    assert!(
+        prompt_resp["result"]["model"]
+            .as_str()
+            .unwrap()
+            .starts_with("strong:")
+    );
     assert_eq!(prompt_resp["result"]["effort"], "high");
 
     // 3. Verify a router-trace JSON was persisted
@@ -338,7 +333,10 @@ fn sensitive_prompt_short_circuits_to_permission_required() {
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let new_resp: Value = serde_json::from_str(line.trim()).unwrap();
-    let session_id = new_resp["result"]["sessionId"].as_str().unwrap().to_string();
+    let session_id = new_resp["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Sensitive prompt (matches the rule-based classifier's `is_sensitive`)
     writeln!(
@@ -350,10 +348,12 @@ fn sensitive_prompt_short_circuits_to_permission_required() {
     reader.read_line(&mut line).unwrap();
     let resp: Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(resp["error"]["code"], -32001);
-    assert!(resp["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("sensitive"));
+    assert!(
+        resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("sensitive")
+    );
 
     drop(stdin);
     let _ = child.wait();
@@ -434,10 +434,12 @@ fn auth_loader_reports_unconfigured_provider() {
     assert_eq!(auth["result"]["configured"], false);
     assert_eq!(auth["result"]["summary"], Value::Null);
     assert_eq!(auth["result"]["provider"], "codex");
-    assert!(auth["result"]["hint"]
-        .as_str()
-        .unwrap()
-        .contains("~/.mona/codex.json"));
+    assert!(
+        auth["result"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("~/.mona/codex.json")
+    );
 
     drop(stdin);
     let _ = child.wait();
@@ -560,7 +562,7 @@ fn session_new_reports_provider_name_when_auth_configured() {
         return;
     }
 
-    // ── Case A: auth configured → providerName is the stub's name() ──
+    // ── Case A: auth configured → providerName is the runtime's name() ──
     let tmp_home = std::env::temp_dir().join(format!("mona-e2e-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp_home).unwrap();
     std::fs::write(
@@ -593,8 +595,8 @@ fn session_new_reports_provider_name_when_auth_configured() {
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let new: Value = serde_json::from_str(line.trim()).unwrap();
-    // ProviderHandle attached → providerName is the stub identifier
-    assert_eq!(new["result"]["providerName"], "codex-stub");
+    // ProviderHandle attached → providerName is the real runtime identifier
+    assert_eq!(new["result"]["providerName"], "openai");
     assert_eq!(new["result"]["provider"], "codex");
     assert_eq!(new["result"]["model"], "gpt-5.5");
 
@@ -632,10 +634,7 @@ fn session_new_reports_provider_name_when_auth_configured() {
     line.clear();
     reader_b.read_line(&mut line).unwrap();
     let new_b: Value = serde_json::from_str(line.trim()).unwrap();
-    assert!(
-        new_b["result"].is_object(),
-        "expected result, got {new_b}"
-    );
+    assert!(new_b["result"].is_object(), "expected result, got {new_b}");
     let session_id_b = new_b["result"]["sessionId"].as_str().unwrap().to_string();
     assert_eq!(new_b["result"]["providerName"], Value::Null);
     assert_eq!(new_b["result"]["provider"], "codex");
@@ -650,10 +649,12 @@ fn session_new_reports_provider_name_when_auth_configured() {
     reader_b.read_line(&mut line).unwrap();
     let auth_b: Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(auth_b["result"]["configured"], false);
-    assert!(auth_b["result"]["hint"]
-        .as_str()
-        .unwrap()
-        .contains("~/.mona/codex.json"));
+    assert!(
+        auth_b["result"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("~/.mona/codex.json")
+    );
 
     drop(stdin_b);
     let _ = child_b.wait();

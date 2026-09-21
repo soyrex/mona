@@ -253,6 +253,7 @@ impl Provider for OpenAIProvider {
         let (tx, rx) = mpsc::channel::<Result<StreamEvent>>(100);
 
         let credentials = Arc::clone(&self.credentials);
+        let allow_oauth_refresh = !self.injected_credentials;
         let transport_mode = transport_mode_snapshot;
         let websocket_cooldowns = Arc::clone(&self.websocket_cooldowns);
         let websocket_failure_streaks = Arc::clone(&self.websocket_failure_streaks);
@@ -448,6 +449,7 @@ impl Provider for OpenAIProvider {
                             attempt_tx,
                             Arc::clone(&persistent_ws),
                             input_item_count,
+                            allow_oauth_refresh,
                         )
                         .await
                     } else {
@@ -487,6 +489,7 @@ impl Provider for OpenAIProvider {
                                 "https".to_string()
                             },
                             attempt_tx,
+                            allow_oauth_refresh,
                         )
                         .await
                     };
@@ -623,9 +626,7 @@ impl Provider for OpenAIProvider {
                                     elapsed_ms, error
                                 ));
                                 next_retry_delay =
-                                    mona_provider_core::retry_after::retry_after_from_error(
-                                        &error,
-                                    );
+                                    mona_provider_core::retry_after::retry_after_from_error(&error);
                                 last_error = Some(error);
                                 continue;
                             }
@@ -756,8 +757,7 @@ impl Provider for OpenAIProvider {
         }
         let availability = mona_base::provider::model_availability_for_account(model);
         if !is_chatgpt_web_model(model)
-            && availability.state
-                == mona_base::provider::AccountModelAvailabilityState::Unavailable
+            && availability.state == mona_base::provider::AccountModelAvailabilityState::Unavailable
         {
             let detail =
                 mona_base::provider::format_account_model_availability_detail(&availability)
@@ -849,7 +849,11 @@ impl Provider for OpenAIProvider {
         // user with only an OPENAI_API_KEY loads an API-key-shaped credential
         // while the mode stays Auto; routing by mode would send that platform
         // key to the ChatGPT/Codex endpoint and get a 401.
-        let account_label = mona_base::auth::codex::active_account_label();
+        let account_label = if self.injected_credentials {
+            None
+        } else {
+            mona_base::auth::codex::active_account_label()
+        };
         let (access_token, is_chatgpt_mode, credential_identity) = {
             let creds = self.credentials.read().await;
             (
@@ -859,7 +863,8 @@ impl Provider for OpenAIProvider {
             )
         };
         let catalog = if is_chatgpt_mode {
-            let access_token = openai_access_token(&self.credentials).await?;
+            let access_token =
+                openai_access_token(&self.credentials, !self.injected_credentials).await?;
             match mona_base::provider::fetch_openai_model_catalog(&access_token).await {
                 Ok(catalog) => catalog,
                 // The server can reject a token that still looks fresh by its
@@ -882,6 +887,7 @@ impl Provider for OpenAIProvider {
                     let refreshed = super::openai_stream_runtime::force_refresh_openai_token(
                         &self.credentials,
                         &refresh_token,
+                        !self.injected_credentials,
                     )
                     .await
                     .map_err(|refresh_err| {
@@ -901,7 +907,8 @@ impl Provider for OpenAIProvider {
             Self::catalog_credential_identity(&credentials)
         };
         if current_credential_identity != credential_identity
-            || mona_base::auth::codex::active_account_label() != account_label
+            || (!self.injected_credentials
+                && mona_base::auth::codex::active_account_label() != account_label)
         {
             mona_base::logging::info(
                 "Discarding OpenAI model catalog fetched for credentials that are no longer active",
@@ -913,6 +920,9 @@ impl Provider for OpenAIProvider {
             Err(poisoned) => *poisoned.into_inner() = catalog.reasoning_efforts.clone(),
         }
         self.revalidate_reasoning_effort();
+        if self.injected_credentials {
+            return Ok(());
+        }
         mona_base::provider::persist_openai_model_catalog(&catalog);
         if !catalog.context_limits.is_empty() {
             mona_base::provider::populate_context_limits(catalog.context_limits);
@@ -1110,7 +1120,8 @@ impl Provider for OpenAIProvider {
             );
         }
 
-        let access_token = openai_access_token(&self.credentials).await?;
+        let access_token =
+            openai_access_token(&self.credentials, !self.injected_credentials).await?;
         let creds = self.credentials.read().await;
         let is_chatgpt_mode = Self::is_chatgpt_mode(&creds);
         let account_id = creds.account_id.clone();
@@ -1220,6 +1231,7 @@ impl Provider for OpenAIProvider {
         Arc::new(OpenAIProvider {
             client: self.client.clone(),
             credentials: Arc::clone(&self.credentials),
+            injected_credentials: self.injected_credentials,
             credential_mode: Arc::clone(&self.credential_mode),
             model: Arc::new(RwLock::new(model)),
             prompt_cache_key: self.prompt_cache_key.clone(),
@@ -1249,6 +1261,11 @@ impl Provider for OpenAIProvider {
     }
 
     async fn invalidate_credentials(&self) {
+        if self.injected_credentials {
+            self.clear_persistent_ws("injected credentials retained")
+                .await;
+            return;
+        }
         let mode = *self.credential_mode.read().await;
         if let Ok(credentials) = super::load_credentials_for_mode(mode) {
             let mut guard = self.credentials.write().await;

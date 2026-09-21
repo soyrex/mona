@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::auth::AuthRegistry;
-use crate::provider::{ProviderHandle, build_provider_for_session};
+use crate::provider::{ProviderHandle, build_provider_with_model};
 use crate::provider_whitelist::{SupportedProvider, parse_provider};
 
 /// One ACP session. Holds a `ProviderHandle` for the per-session
@@ -21,7 +21,7 @@ pub struct Session {
     pub effort: String,
     pub working_dir: Option<String>,
     pub created_at: i64,
-    /// Provider handle (stub in Phase 3.5, real in Phase 4).
+    /// Real provider when authenticated; unavailable placeholder otherwise.
     pub handle: Option<ProviderHandle>,
 }
 
@@ -75,13 +75,19 @@ impl SessionRegistry {
         auth: &AuthRegistry,
     ) -> Result<Session, SessionError> {
         let provider = parse_provider(provider_str)?;
-        let handle = build_provider_for_session(provider_str, auth)
-            .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
+        let handle = build_provider_with_model(
+            provider_str,
+            auth,
+            model.unwrap_or(provider.default_model()),
+        )
+        .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
         let session = Session::new(
             provider,
-            model.map(|s| s.to_string())
+            model
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| provider.default_model().to_string()),
-            effort.map(|s| s.to_string())
+            effort
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| provider.default_effort().to_string()),
             working_dir,
             Some(handle),
@@ -141,15 +147,18 @@ pub struct SessionInfo {
 
 impl From<&Session> for SessionInfo {
     fn from(s: &Session) -> Self {
-        // `provider_name` is `Some(<stub-id>)` only when the session's
+        // `provider_name` is `Some(<runtime-id>)` only when the session's
         // handle was built from a real auth record. Sessions created
         // without auth (Phase 3.5 placeholder handles) surface
         // `provider_name: null` so clients can distinguish "configured"
         // from "placeholder" sessions.
-        let provider_name = s
-            .handle
-            .as_ref()
-            .and_then(|h| if h.auth.is_some() { Some(h.provider.name().to_string()) } else { None });
+        let provider_name = s.handle.as_ref().and_then(|h| {
+            if h.auth.is_some() {
+                Some(h.provider.name().to_string())
+            } else {
+                None
+            }
+        });
         Self {
             session_id: s.id.clone(),
             provider: s.provider.as_str().to_string(),
@@ -192,9 +201,7 @@ mod tests {
     fn new_session_attaches_provider_handle_when_auth_configured() {
         let r = SessionRegistry::default();
         let auth = registry_with_all();
-        let s = r
-            .new_session("codex", None, None, None, &auth)
-            .unwrap();
+        let s = r.new_session("codex", None, None, None, &auth).unwrap();
         assert!(s.handle.is_some());
         let h = s.handle.unwrap();
         assert_eq!(h.provider_kind, SupportedProvider::Codex);
@@ -206,7 +213,7 @@ mod tests {
         // Phase 3.5: missing auth does NOT fail session/new. Instead, a
         // placeholder handle is attached with `auth: None` so the session
         // can be listed/cancelled but `provider_name` surfaces as null
-        // and the stub refuses to drive a model turn.
+        // and completion returns an authentication error.
         let r = SessionRegistry::default();
         let auth = AuthRegistry::default();
         let s = r.new_session("codex", None, None, None, &auth).unwrap();
@@ -229,7 +236,7 @@ mod tests {
         let auth = registry_with_all();
         let s = r.new_session("codex", None, None, None, &auth).unwrap();
         let info: SessionInfo = (&s).into();
-        assert_eq!(info.provider_name.as_deref(), Some("codex-stub"));
+        assert_eq!(info.provider_name.as_deref(), Some("openai"));
     }
 
     #[test]
@@ -241,6 +248,16 @@ mod tests {
         assert_eq!(s.model, "gpt-5.5");
         assert_eq!(s.effort, "high");
         assert!(r.get(&s.id).is_some());
+    }
+
+    #[test]
+    fn configured_session_preserves_explicit_model_in_runtime() {
+        let registry = SessionRegistry::default();
+        let session = registry
+            .new_session("codex", Some("gpt-5.4"), None, None, &registry_with_all())
+            .unwrap();
+        assert_eq!(session.model, "gpt-5.4");
+        assert_eq!(session.handle.unwrap().provider.model(), "gpt-5.4");
     }
 
     #[test]

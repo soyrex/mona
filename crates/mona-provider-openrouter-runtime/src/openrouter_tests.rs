@@ -3804,3 +3804,129 @@ fn configured_swarm_root_effort_reads_real_config() {
         assert_eq!(provider.reasoning_effort().as_deref(), Some(mode));
     }
 }
+
+#[test]
+fn injected_minimax_is_direct_and_preserves_its_identity() {
+    let _lock = ENV_LOCK.lock();
+    let _namespace = EnvVarGuard::set("MONA_OPENROUTER_CACHE_NAMESPACE", "other-provider");
+    let _key = EnvVarGuard::set("MINIMAX_API_KEY", "ambient-key");
+    let provider = OpenRouterProvider::new_minimax_with_credentials(
+        "explicit-key",
+        "https://api.minimax.io/v1/",
+        "MiniMax-M3",
+    )
+    .unwrap();
+    assert_eq!(provider.api_base, "https://api.minimax.io/v1");
+    assert_eq!(provider.model(), "MiniMax-M3");
+    assert_eq!(provider.name(), "minimax");
+    assert_eq!(provider.fork().name(), "minimax");
+    assert!(!provider.send_openrouter_headers);
+    assert!(!provider.supports_provider_features);
+    assert_eq!(
+        std::env::var("MONA_OPENROUTER_CACHE_NAMESPACE").unwrap(),
+        "other-provider"
+    );
+    match &provider.auth {
+        ProviderAuth::AuthorizationBearer { token, .. } => assert_eq!(token, "explicit-key"),
+        _ => panic!("expected direct MiniMax bearer auth"),
+    }
+    assert!(
+        OpenRouterProvider::new_minimax_with_credentials(
+            "",
+            "https://api.minimax.io/v1",
+            "MiniMax-M3"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn injected_minimax_completion_uses_direct_bearer_transport() {
+    let _lock = ENV_LOCK.lock();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        loop {
+            let mut buf = [0u8; 4096];
+            let count = socket.read(&mut buf).unwrap();
+            assert!(count > 0, "request ended before body");
+            request.extend_from_slice(&buf[..count]);
+            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]);
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        request_tx
+            .send(String::from_utf8(request).unwrap())
+            .unwrap();
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"direct MiniMax\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).unwrap();
+    });
+    let provider = OpenRouterProvider::new_minimax_with_credentials(
+        "explicit-coding-plan-key",
+        format!("http://{addr}/v1"),
+        "MiniMax-M3",
+    )
+    .unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let events = rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut stream = provider.complete(&[], &[], "hello", None).await.unwrap();
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event.unwrap());
+            }
+            events
+        })
+        .await
+        .expect("direct MiniMax stream timed out")
+    });
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::TextDelta(text) if text == "direct MiniMax"))
+    );
+    let request = request_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let headers = request
+        .split("\r\n\r\n")
+        .next()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(headers.starts_with("post /v1/chat/completions http/1.1\r\n"));
+    assert!(headers.contains("authorization: bearer explicit-coding-plan-key"));
+    assert!(!headers.contains("http-referer:"));
+    assert!(!headers.contains("x-title:"));
+    assert!(!headers.contains("openrouter"));
+    let body: serde_json::Value =
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["model"], "MiniMax-M3");
+    server.join().unwrap();
+}

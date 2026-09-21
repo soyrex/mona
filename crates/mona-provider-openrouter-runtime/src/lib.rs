@@ -19,6 +19,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
+use models_catalog_parse::parse_openai_compatible_models_response;
 use mona_base::provider_catalog::{
     OPENAI_COMPAT_PROFILE, is_safe_env_file_name, is_safe_env_key_name,
     load_api_key_from_env_or_config, load_env_value_from_env_or_config, normalize_api_base,
@@ -39,7 +40,6 @@ use mona_provider_openrouter::{
     save_disk_cache_with_source, save_disk_cache_with_source_for_namespace,
     save_endpoints_disk_cache,
 };
-use models_catalog_parse::parse_openai_compatible_models_response;
 use reqwest::Client;
 use reqwest::header::HeaderName;
 use serde::Deserialize;
@@ -1374,6 +1374,51 @@ impl OpenRouterProvider {
                 .auth
                 .label()
                 .eq_ignore_ascii_case(mona_base::subscription_catalog::MONA_API_KEY_ENV)
+    }
+
+    /// Direct MiniMax API transport using only caller-supplied credentials.
+    /// No OpenRouter account, routing, headers, or environment mutation.
+    pub fn new_minimax_with_credentials(
+        api_key: impl Into<String>,
+        api_base: impl AsRef<str>,
+        model: impl Into<String>,
+    ) -> Result<Self> {
+        let api_key = api_key.into().trim().to_string();
+        anyhow::ensure!(!api_key.is_empty(), "MiniMax API key must not be empty");
+        let api_base = normalize_api_base(api_base.as_ref())
+            .ok_or_else(|| anyhow::anyhow!("MiniMax API base is invalid"))?;
+        let model = model.into().trim().to_string();
+        anyhow::ensure!(!model.is_empty(), "MiniMax model must not be empty");
+        let profile = mona_base::provider_catalog::MINIMAX_PROFILE;
+        Ok(Self {
+            client: mona_provider_core::shared_http_client(),
+            model: Arc::new(RwLock::new(model)),
+            reasoning_effort: Arc::new(RwLock::new(None)),
+            api_base,
+            auth: ProviderAuth::AuthorizationBearer {
+                token: api_key,
+                label: "MiniMax API key".to_string(),
+            },
+            supports_provider_features: false,
+            supports_model_catalog: false,
+            profile_id: Some(profile.id.to_string()),
+            reasoning_effort_support: None,
+            disable_reasoning_heuristics: false,
+            static_reasoning_config: HashMap::new(),
+            max_tokens: None,
+            extra_body: None,
+            static_models: openai_compatible_profile_static_models(profile),
+            static_context_limits: openai_compatible_profile_static_context_limits(profile),
+            static_image_input_support: HashMap::new(),
+            send_openrouter_headers: false,
+            conversation_id: new_conversation_id(),
+            models_cache: Arc::new(RwLock::new(ModelsCache::default())),
+            model_catalog_refresh: Arc::new(Mutex::new(ModelCatalogRefreshState::default())),
+            provider_routing: Arc::new(RwLock::new(ProviderRouting::default())),
+            provider_pin: Arc::new(Mutex::new(None)),
+            endpoints_cache: Arc::new(RwLock::new(HashMap::new())),
+            endpoint_refresh: Arc::new(Mutex::new(EndpointRefreshTracker::default())),
+        })
     }
 
     pub fn new_named_openai_compatible(

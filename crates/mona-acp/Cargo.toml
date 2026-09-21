@@ -14,6 +14,10 @@ name = "mona-acp"
 path = "src/main.rs"
 
 [dependencies]
+mona-base = { path = "../mona-base", default-features = false }
+mona-provider-openai-runtime = { path = "../mona-provider-openai-runtime" }
+mona-provider-anthropic-runtime = { path = "../mona-provider-anthropic-runtime" }
+mona-provider-openrouter-runtime = { path = "../mona-provider-openrouter-runtime" }
 mona-jev = { path = "../mona-jev" }
 mona-message-types = { path = "../mona-message-types" }
 mona-provider-core = { path = "../mona-provider-core" }

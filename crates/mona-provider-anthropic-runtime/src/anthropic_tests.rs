@@ -780,8 +780,8 @@ async fn live_anthropic_reasoning_smoke() -> Result<()> {
     let model = std::env::var("MONA_LIVE_ANTHROPIC_MODEL")
         .or_else(|_| std::env::var("MONA_ANTHROPIC_MODEL"))
         .unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
-    let effort = std::env::var("MONA_LIVE_ANTHROPIC_REASONING_EFFORT")
-        .unwrap_or_else(|_| "low".to_string());
+    let effort =
+        std::env::var("MONA_LIVE_ANTHROPIC_REASONING_EFFORT").unwrap_or_else(|_| "low".to_string());
     let prompt = std::env::var("MONA_LIVE_ANTHROPIC_PROMPT")
         .unwrap_or_else(|_| "Live smoke test: answer exactly OK.".to_string());
     let system = std::env::var("MONA_LIVE_ANTHROPIC_SYSTEM").unwrap_or_else(|_| {
@@ -2218,4 +2218,55 @@ fn configured_swarm_root_effort_reads_real_config() {
         }
         assert_eq!(provider.stored_reasoning_effort().as_deref(), Some(mode));
     }
+}
+
+#[tokio::test]
+async fn injected_anthropic_credentials_ignore_ambient_and_fail_safe_on_expiry() {
+    let _lock = mona_base::storage::lock_test_env();
+    let _base = EnvVarGuard::set("MONA_ANTHROPIC_API_BASE", "https://proxy.example/v1");
+    let _key = EnvVarGuard::set("ANTHROPIC_API_KEY", "ambient-key");
+    let provider = AnthropicProvider::with_credentials(
+        "claude-sonnet-4-6",
+        AnthropicCredentials::ApiKey("injected-key".into()),
+    )
+    .unwrap();
+    assert_eq!(provider.direct_transport.api_url, API_URL);
+    assert_eq!(
+        provider.get_access_token().await.unwrap(),
+        ("injected-key".to_string(), false)
+    );
+    let oauth = AnthropicProvider::with_credentials(
+        "claude-sonnet-4-6",
+        AnthropicCredentials::OAuth {
+            access_token: "injected-access".into(),
+            refresh_token: "injected-refresh".into(),
+            expires_at_ms: i64::MAX,
+        },
+    )
+    .unwrap();
+    Provider::invalidate_credentials(&oauth).await;
+    assert_eq!(
+        oauth.get_access_token().await.unwrap(),
+        ("injected-access".to_string(), true)
+    );
+    assert!(
+        oauth
+            .set_credential_mode(AnthropicCredentialMode::ApiKey)
+            .is_err()
+    );
+    assert!(
+        force_refresh_oauth_token(Arc::clone(&oauth.credentials), false)
+            .await
+            .is_err()
+    );
+    oauth.credentials.write().await.as_mut().unwrap().expires_at = 1;
+    assert!(oauth.get_access_token().await.is_err());
+}
+
+#[test]
+fn injected_anthropic_metadata_is_session_scoped() {
+    let metadata = oauth_request_metadata("injected-session", false);
+    let user: serde_json::Value = serde_json::from_str(&metadata.user_id).unwrap();
+    assert_eq!(user["session_id"], "injected-session");
+    assert_eq!(user["account_uuid"], "unknown-account");
 }

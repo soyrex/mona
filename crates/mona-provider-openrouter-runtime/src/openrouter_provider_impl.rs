@@ -139,8 +139,7 @@ impl Provider for OpenRouterProvider {
         }
 
         let sent_reasoning_config = reasoning_effort.as_deref().is_some_and(|effort| {
-            let resolved =
-                mona_base::prompt::swarm_root_reasoning_effort(effort).unwrap_or(effort);
+            let resolved = mona_base::prompt::swarm_root_reasoning_effort(effort).unwrap_or(effort);
             self.apply_resolved_reasoning_effort(&mut request, resolved, strict_openai_schema)
         });
 
@@ -297,6 +296,9 @@ impl Provider for OpenRouterProvider {
     }
 
     fn name(&self) -> &str {
+        if self.profile_id.as_deref() == Some("minimax") && self.auth.label() == "MiniMax API key" {
+            return "minimax";
+        }
         "openrouter"
     }
 

@@ -713,6 +713,7 @@ fn spawn_persistent_ws_keepalive_with_interval(
 pub struct OpenAIProvider {
     client: Client,
     credentials: Arc<RwLock<CodexCredentials>>,
+    injected_credentials: bool,
     credential_mode: Arc<RwLock<OpenAICredentialMode>>,
     model: Arc<RwLock<String>>,
     prompt_cache_key: Option<String>,
@@ -764,13 +765,31 @@ impl OpenAIProvider {
         )
     }
 
+    /// Uses caller-owned credentials and model without ambient auth replacement.
+    /// OAuth refresh remains the embedding host's responsibility.
+    pub fn new_with_credentials_and_model(
+        credentials: CodexCredentials,
+        model: impl Into<String>,
+    ) -> Self {
+        Self::new_inner_with_options(credentials, false, true, Some(model.into()))
+    }
+
     fn new_inner(credentials: CodexCredentials, browser_only: bool) -> Self {
-        let credential_mode = if browser_only {
+        Self::new_inner_with_options(credentials, browser_only, false, None)
+    }
+
+    fn new_inner_with_options(
+        credentials: CodexCredentials,
+        browser_only: bool,
+        injected_credentials: bool,
+        explicit_model: Option<String>,
+    ) -> Self {
+        let credential_mode = if browser_only || injected_credentials {
             OpenAICredentialMode::Auto
         } else {
             OpenAICredentialMode::from_runtime_env(mona_provider_core::DualAuthProvider::OpenAI)
         };
-        let credentials = if browser_only {
+        let credentials = if browser_only || injected_credentials {
             credentials
         } else {
             match credential_mode {
@@ -782,7 +801,9 @@ impl OpenAIProvider {
         };
 
         // Check for model override from environment
-        let mut model = if browser_only {
+        let mut model = if let Some(model) = explicit_model {
+            model.trim().to_string()
+        } else if browser_only {
             CHATGPT_WEB_MODEL.to_string()
         } else {
             std::env::var("MONA_OPENAI_MODEL")
@@ -790,7 +811,8 @@ impl OpenAIProvider {
                 .trim()
                 .to_string()
         };
-        if !is_chatgpt_web_model(&model)
+        if !injected_credentials
+            && !is_chatgpt_web_model(&model)
             && !mona_base::provider::known_openai_model_ids()
                 .iter()
                 .any(|known| known == &model)
@@ -806,8 +828,7 @@ impl OpenAIProvider {
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
-        let prompt_cache_retention =
-            mona_base::provider::openai::prompt_cache_retention_from_env();
+        let prompt_cache_retention = mona_base::provider::openai::prompt_cache_retention_from_env();
         if prompt_cache_retention.is_none()
             && let Ok(raw) = std::env::var("MONA_OPENAI_PROMPT_CACHE_RETENTION")
             && !raw.trim().is_empty()
@@ -850,6 +871,7 @@ impl OpenAIProvider {
         let provider = Self {
             client: mona_provider_core::shared_http_client(),
             credentials: Arc::new(RwLock::new(credentials)),
+            injected_credentials,
             credential_mode: Arc::new(RwLock::new(credential_mode)),
             model: Arc::new(RwLock::new(model)),
             prompt_cache_key,
@@ -877,6 +899,10 @@ impl OpenAIProvider {
     }
 
     pub(crate) fn reload_credentials_now(&self) {
+        if self.injected_credentials {
+            self.clear_persistent_ws_try("injected credentials retained");
+            return;
+        }
         let mode = self
             .credential_mode
             .try_read()
@@ -901,6 +927,10 @@ impl OpenAIProvider {
     }
 
     pub(crate) fn set_credential_mode(&self, mode: OpenAICredentialMode) -> Result<()> {
+        anyhow::ensure!(
+            !self.injected_credentials,
+            "Cannot replace injected OpenAI credentials from ambient auth"
+        );
         let credentials = load_credentials_for_mode(mode)?;
         match self.credentials.try_write() {
             Ok(mut guard) => {
@@ -1342,6 +1372,9 @@ impl OpenAIProvider {
 
     async fn model_id(&self) -> String {
         let current = self.model.read().await.clone();
+        if self.injected_credentials {
+            return current.strip_suffix("[1m]").unwrap_or(&current).to_string();
+        }
         let availability = mona_base::provider::model_availability_for_account(&current);
 
         match availability.state {
@@ -1383,10 +1416,13 @@ impl OpenAIProvider {
                     // the catalog request instead of guaranteeing a 401. Fall
                     // back to the raw snapshot if refresh fails; the fetch
                     // will then fail and finish the in-flight marker.
-                    let token = match openai_access_token(&self.credentials).await {
-                        Ok(token) => token,
-                        Err(_) => self.credentials.read().await.access_token.clone(),
-                    };
+                    let token =
+                        match openai_access_token(&self.credentials, !self.injected_credentials)
+                            .await
+                        {
+                            Ok(token) => token,
+                            Err(_) => self.credentials.read().await.access_token.clone(),
+                        };
                     mona_base::provider::refresh_openai_model_catalog_in_background(
                         token,
                         is_chatgpt_mode,
