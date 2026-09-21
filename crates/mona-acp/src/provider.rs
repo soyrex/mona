@@ -3,7 +3,7 @@
 
 use crate::auth::{Auth, AuthRegistry};
 use crate::provider_whitelist::{SupportedProvider, parse_provider};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use mona_base::auth::codex::CodexCredentials;
 use mona_message_types::{Message, ToolDefinition};
@@ -104,7 +104,9 @@ pub async fn authenticated_available_models(handle: &ProviderHandle) -> Vec<Stri
                 .await
                 .map(|catalog| catalog.available_models)
         }
-        Some(Auth::MinimaxApiKey { .. }) => Ok(handle.provider.available_models_for_switching()),
+        Some(Auth::MinimaxApiKey { api_key, api_base }) => {
+            fetch_minimax_model_catalog(api_key, api_base).await
+        }
         None => return Vec::new(),
     };
 
@@ -124,12 +126,83 @@ pub async fn authenticated_available_models(handle: &ProviderHandle) -> Vec<Stri
 }
 
 fn fallback_account_models(handle: &ProviderHandle) -> Vec<String> {
-    match handle.provider_kind {
-        SupportedProvider::Codex | SupportedProvider::Claude => None,
-        SupportedProvider::Minimax => Some(handle.provider.available_models_for_switching()),
+    vec![handle.provider.model()]
+}
+
+async fn fetch_minimax_model_catalog(api_key: &str, api_base: &str) -> Result<Vec<String>> {
+    let endpoint = format!("{}/models", api_base.trim_end_matches('/'));
+    let response = mona_provider_core::shared_http_client()
+        .get(&endpoint)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .with_context(|| format!("send MiniMax model catalogue request to {endpoint}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .with_context(|| format!("read MiniMax model catalogue response from {endpoint}"))?;
+    ensure!(
+        status.is_success(),
+        "MiniMax model catalogue request failed with {status}: {}",
+        mona_base::util::truncate_str(&body, 400)
+    );
+    let models = parse_minimax_model_catalog(&body)?;
+    Ok(limit_minimax_catalog_for_credential(
+        api_key, api_base, models,
+    ))
+}
+
+fn parse_minimax_model_catalog(body: &str) -> Result<Vec<String>> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).context("parse MiniMax model catalogue JSON")?;
+    let entries = value
+        .get("data")
+        .or_else(|| value.get("models"))
+        .unwrap_or(&value)
+        .as_array()
+        .context("MiniMax model catalogue omitted its model array")?;
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            entry.as_str().or_else(|| {
+                entry
+                    .get("id")
+                    .or_else(|| entry.get("name"))
+                    .and_then(serde_json::Value::as_str)
+            })
+        })
+        .map(str::to_string)
+        .collect())
+}
+
+fn limit_minimax_catalog_for_credential(
+    api_key: &str,
+    api_base: &str,
+    models: Vec<String>,
+) -> Vec<String> {
+    let official_minimax_api = url::Url::parse(api_base).is_ok_and(|url| {
+        url.host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("api.minimax.io"))
+    });
+    if !official_minimax_api || !api_key.trim().starts_with("sk-cp-") {
+        return models;
     }
-    .filter(|models| !models.is_empty())
-    .unwrap_or_else(|| vec![handle.provider.model()])
+
+    // MiniMax's Token Plan keys use the documented `sk-cp-` prefix and have
+    // access to the current M3/M2.7 family. GET /models is a public product
+    // catalogue rather than an entitlement response, so intersect it with the
+    // plan's documented text-model set before advertising routes to clients.
+    const TOKEN_PLAN_TEXT_MODELS: &[&str] =
+        &["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
+    models
+        .into_iter()
+        .filter(|model| {
+            TOKEN_PLAN_TEXT_MODELS
+                .iter()
+                .any(|allowed| model.eq_ignore_ascii_case(allowed))
+        })
+        .collect()
 }
 
 fn filter_provider_models(provider: SupportedProvider, models: Vec<String>) -> Vec<String> {
@@ -401,5 +474,35 @@ mod tests {
             },
         );
         assert!(build_provider_for_session("codex", &mismatched).is_err());
+    }
+
+    #[test]
+    fn token_plan_catalog_excludes_paygo_only_minimax_models() {
+        let parsed = parse_minimax_model_catalog(
+            r#"{"data":[{"id":"MiniMax-M3"},{"id":"MiniMax-M2.7"},{"id":"MiniMax-M2.7-highspeed"},{"id":"MiniMax-M2.5"}]}"#,
+        )
+        .unwrap();
+        let limited = limit_minimax_catalog_for_credential(
+            "sk-cp-example",
+            "https://api.minimax.io/v1",
+            parsed,
+        );
+        assert_eq!(
+            limited,
+            vec!["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"]
+        );
+    }
+
+    #[test]
+    fn custom_minimax_endpoint_keeps_its_authenticated_catalog() {
+        let models = vec!["MiniMax-M3".into(), "MiniMax-M2.5".into()];
+        assert_eq!(
+            limit_minimax_catalog_for_credential(
+                "sk-cp-relayed",
+                "https://minimax.example.test/v1",
+                models.clone(),
+            ),
+            models
+        );
     }
 }

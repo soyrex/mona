@@ -3822,6 +3822,8 @@ fn injected_minimax_is_direct_and_preserves_its_identity() {
     assert_eq!(provider.fork().name(), "minimax");
     assert!(!provider.send_openrouter_headers);
     assert!(!provider.supports_provider_features);
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("adaptive"));
+    assert_eq!(provider.available_efforts(), vec!["disabled", "adaptive"]);
     assert_eq!(
         std::env::var("MONA_OPENROUTER_CACHE_NAMESPACE").unwrap(),
         "other-provider"
@@ -3838,6 +3840,24 @@ fn injected_minimax_is_direct_and_preserves_its_identity() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn minimax_thinking_modes_are_model_native_and_model_aware() {
+    let provider = OpenRouterProvider::new_minimax_with_credentials(
+        "explicit-key",
+        "https://api.minimax.io/v1",
+        "MiniMax-M3",
+    )
+    .unwrap();
+    provider.set_reasoning_effort("disabled").unwrap();
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("disabled"));
+
+    provider.set_model("MiniMax-M2.7").unwrap();
+    assert_eq!(provider.available_efforts(), vec!["adaptive"]);
+    assert!(provider.set_reasoning_effort("disabled").is_err());
+    provider.set_reasoning_effort("adaptive").unwrap();
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("adaptive"));
 }
 
 #[test]
@@ -3928,5 +3948,6 @@ fn injected_minimax_completion_uses_direct_bearer_transport() {
     let body: serde_json::Value =
         serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(body["model"], "MiniMax-M3");
+    assert_eq!(body["thinking"]["type"], "adaptive");
     server.join().unwrap();
 }

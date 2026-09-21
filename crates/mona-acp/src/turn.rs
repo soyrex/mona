@@ -241,10 +241,11 @@ pub async fn run_turn_with_jev_context(
     );
     let requested_plan = modified_plan.as_ref().unwrap_or(&plan);
     let requested_model = eligible_model_for_tier(session, requested_plan.tier);
-    let requested_effort = requested_plan
-        .effort
-        .clone()
-        .unwrap_or_else(|| session.effort.clone());
+    let requested_effort = compatible_effort_for_model(
+        session.provider,
+        &requested_model,
+        requested_plan.effort.as_deref().unwrap_or(&session.effort),
+    );
     let swap_budget_exhausted = swaps_in_session >= config.max_swaps_per_session
         && (requested_model != session.model || requested_effort != session.effort);
     if swap_budget_exhausted {
@@ -462,6 +463,26 @@ fn eligible_model_for_tier(session: &Session, requested: ModelTier) -> String {
         .unwrap_or_else(|| session.model.clone())
 }
 
+fn compatible_effort_for_model(
+    provider: crate::provider_whitelist::SupportedProvider,
+    model: &str,
+    requested: &str,
+) -> String {
+    if provider != crate::provider_whitelist::SupportedProvider::Minimax {
+        return requested.to_string();
+    }
+
+    // MiniMax M2.x always thinks even if `disabled` is sent. Persist and
+    // report the effective mode instead of claiming an impossible setting.
+    if !model.to_ascii_lowercase().starts_with("minimax-m3") {
+        return "adaptive".to_string();
+    }
+    match requested.trim().to_ascii_lowercase().as_str() {
+        "disabled" | "disable" | "off" | "false" | "0" => "disabled".to_string(),
+        _ => "adaptive".to_string(),
+    }
+}
+
 /// Build a `JevClassifyRequest` from a raw user message + session metadata.
 /// Useful for tests and for callers that don't have an `Agent` state.
 pub fn build_request_from_session(
@@ -501,7 +522,11 @@ pub fn build_request_from_session_with_context(
     if available_efforts.is_empty() {
         available_efforts =
             if session.provider == crate::provider_whitelist::SupportedProvider::Minimax {
-                vec!["none".into()]
+                if session.model.to_ascii_lowercase().starts_with("minimax-m3") {
+                    vec!["disabled".into(), "adaptive".into()]
+                } else {
+                    vec!["adaptive".into()]
+                }
             } else {
                 vec![
                     "none".into(),
@@ -653,6 +678,56 @@ mod tests {
                 .available_models
                 .contains(&"gpt-5.1-codex-mini".into())
         );
+    }
+
+    #[test]
+    fn minimax_classifier_sees_native_thinking_modes() {
+        let mut s = session();
+        s.provider = SupportedProvider::Minimax;
+        s.model = "MiniMax-M3".into();
+        s.effort = "adaptive".into();
+        s.available_models = vec!["MiniMax-M3".into(), "MiniMax-M2.7".into()];
+
+        let request = build_request_from_session("hello", &s, None);
+        assert_eq!(request.available_efforts, vec!["disabled", "adaptive"]);
+
+        s.model = "MiniMax-M2.7".into();
+        let request = build_request_from_session("hello", &s, None);
+        assert_eq!(request.available_efforts, vec!["adaptive"]);
+    }
+
+    #[tokio::test]
+    async fn minimax_m2_route_reports_its_effective_always_thinking_mode() {
+        let classifier = MockJevClassifier::new();
+        classifier.set_plan(JevRoutePlan::passthrough(
+            ModelTier::Balanced,
+            Some("disabled".into()),
+        ));
+        let mut s = session();
+        s.provider = SupportedProvider::Minimax;
+        s.model = "MiniMax-M3".into();
+        s.effort = "adaptive".into();
+        s.available_models = vec![
+            "MiniMax-M3".into(),
+            "MiniMax-M2.7".into(),
+            "MiniMax-M2.7-highspeed".into(),
+        ];
+
+        let decision = run_turn_with_jev(
+            Arc::new(classifier),
+            &s,
+            "routine implementation",
+            0,
+            0,
+            None,
+            &RouterConfig::default(),
+            std::path::Path::new("/tmp/mona-test"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(decision.requested_model.as_deref(), Some("MiniMax-M2.7"));
+        assert_eq!(decision.requested_effort.as_deref(), Some("adaptive"));
     }
 
     #[tokio::test]

@@ -991,6 +991,10 @@ impl OpenRouterProvider {
         matches!(profile_id, Some(id) if id.eq_ignore_ascii_case("zai"))
     }
 
+    fn profile_supports_minimax_thinking(profile_id: Option<&str>) -> bool {
+        matches!(profile_id, Some(id) if id.eq_ignore_ascii_case("minimax"))
+    }
+
     /// DeepSeek-family models accept the DeepSeek-style top-level
     /// `reasoning_effort` request field regardless of which OpenAI-compatible
     /// gateway serves them (issue #352: profiles like opencode-go serve
@@ -1086,7 +1090,8 @@ impl OpenRouterProvider {
     }
 
     pub(crate) fn supports_any_reasoning_effort(&self) -> bool {
-        self.supports_deepseek_reasoning_effort()
+        Self::profile_supports_minimax_thinking(self.profile_id.as_deref())
+            || self.supports_deepseek_reasoning_effort()
             || self.supports_openai_reasoning_effort()
             || Self::profile_supports_unified_reasoning(
                 self.profile_id.as_deref(),
@@ -1095,7 +1100,15 @@ impl OpenRouterProvider {
     }
 
     pub(crate) fn normalize_reasoning_effort_for_self(&self, effort: &str) -> Option<String> {
-        if self.supports_deepseek_reasoning_effort() {
+        if Self::profile_supports_minimax_thinking(self.profile_id.as_deref()) {
+            match effort.trim().to_ascii_lowercase().as_str() {
+                "adaptive" | "enabled" | "enable" | "on" | "true" | "1" => {
+                    Some("adaptive".to_string())
+                }
+                "disabled" | "disable" | "off" | "false" | "0" => Some("disabled".to_string()),
+                _ => None,
+            }
+        } else if self.supports_deepseek_reasoning_effort() {
             Self::normalize_reasoning_effort(effort)
         } else if self.supports_openai_reasoning_effort() {
             Self::normalize_openai_reasoning_effort(effort)
@@ -1393,7 +1406,7 @@ impl OpenRouterProvider {
         Ok(Self {
             client: mona_provider_core::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
-            reasoning_effort: Arc::new(RwLock::new(None)),
+            reasoning_effort: Arc::new(RwLock::new(Some("adaptive".to_string()))),
             api_base,
             auth: ProviderAuth::AuthorizationBearer {
                 token: api_key,

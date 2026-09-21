@@ -34,10 +34,9 @@ impl SupportedProvider {
     pub fn default_effort(&self) -> &'static str {
         match self {
             Self::Codex | Self::Claude => "high",
-            // The direct MiniMax profile does not expose a configurable
-            // reasoning-effort control. Reporting `high` here would make the
-            // ACP session metadata disagree with the live runtime.
-            Self::Minimax => "none",
+            // MiniMax-M3 calls its default thinking mode `adaptive`; this is
+            // provider-native rather than an OpenAI-style effort ladder.
+            Self::Minimax => "adaptive",
         }
     }
 
@@ -210,6 +209,6 @@ mod tests {
             SupportedProvider::Minimax.model_for_tier(ModelTier::Balanced),
             "MiniMax-M2.7"
         );
-        assert_eq!(SupportedProvider::Minimax.default_effort(), "none");
+        assert_eq!(SupportedProvider::Minimax.default_effort(), "adaptive");
     }
 }

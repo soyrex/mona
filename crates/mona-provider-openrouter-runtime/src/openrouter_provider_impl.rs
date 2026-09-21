@@ -43,7 +43,16 @@ impl Provider for OpenRouterProvider {
     ) -> Result<EventStream> {
         let model = self.model.read().await.clone();
         let reasoning_effort = self.reasoning_effort();
-        let thinking_override = Self::thinking_override();
+        let minimax_thinking = Self::profile_supports_minimax_thinking(self.profile_id.as_deref());
+        let thinking_override = if minimax_thinking {
+            reasoning_effort.as_deref().and_then(|mode| match mode {
+                "adaptive" => Some(true),
+                "disabled" => Some(false),
+                _ => None,
+            })
+        } else {
+            Self::thinking_override()
+        };
         // Moonshot's dedicated Kimi coding endpoint enables thinking server-side
         // by default and rejects any assistant tool-call message that lacks
         // `reasoning_content`, even though its model id (`kimi-for-coding`) is
@@ -159,7 +168,13 @@ impl Provider for OpenRouterProvider {
             && !strict_openai_schema
         {
             request["thinking"] = serde_json::json!({
-                "type": if enable { "enabled" } else { "disabled" }
+                "type": if enable && minimax_thinking {
+                    "adaptive"
+                } else if enable {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
             });
         }
 
@@ -477,7 +492,19 @@ impl Provider for OpenRouterProvider {
     }
 
     fn available_efforts(&self) -> Vec<&'static str> {
-        if self.supports_deepseek_reasoning_effort() {
+        if Self::profile_supports_minimax_thinking(self.profile_id.as_deref()) {
+            if self
+                .model_snapshot()
+                .to_ascii_lowercase()
+                .starts_with("minimax-m3")
+            {
+                vec!["disabled", "adaptive"]
+            } else {
+                // MiniMax documents M2.x as always-thinking: a disabled value
+                // is accepted by the API but deliberately has no effect.
+                vec!["adaptive"]
+            }
+        } else if self.supports_deepseek_reasoning_effort() {
             mona_provider_core::DEEPSEEK_SELECTABLE_EFFORTS.to_vec()
         } else if self.supports_openai_reasoning_effort() {
             mona_provider_core::OPENAI_SELECTABLE_EFFORTS.to_vec()
