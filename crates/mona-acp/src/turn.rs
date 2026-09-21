@@ -39,7 +39,8 @@ use uuid::Uuid;
 pub struct RouterConfig {
     /// Minimum confidence to apply a plan. Below this, keep current model.
     pub confidence_floor: f32,
-    /// Minimum number of user turns between tier swaps (cooldown).
+    /// Minimum number of user turns between tier swaps. Zero disables the
+    /// fixed cooldown so every user turn may be independently routed.
     pub min_turns_between_swaps: u32,
     /// Maximum number of tier swaps allowed in a single session.
     pub max_swaps_per_session: u32,
@@ -49,7 +50,7 @@ impl Default for RouterConfig {
     fn default() -> Self {
         Self {
             confidence_floor: 0.5,
-            min_turns_between_swaps: 2,
+            min_turns_between_swaps: 0,
             max_swaps_per_session: 8,
         }
     }
@@ -139,8 +140,9 @@ pub async fn run_turn_with_jev(
     // Compatibility entry point for embedders that only have a total turn
     // count. The ACP server supplies the more accurate per-session value
     // based on the last successful live swap.
-    let cooldown_active =
-        turn_count > 0 && (turn_count % config.min_turns_between_swaps.max(1) != 0);
+    let cooldown_active = config.min_turns_between_swaps > 0
+        && turn_count > 0
+        && (turn_count % config.min_turns_between_swaps != 0);
     run_turn_with_jev_context(
         classifier,
         session,
@@ -238,10 +240,7 @@ pub async fn run_turn_with_jev_context(
         cooldown_active,
     );
     let requested_plan = modified_plan.as_ref().unwrap_or(&plan);
-    let requested_model = session
-        .provider
-        .model_for_tier(requested_plan.tier)
-        .to_string();
+    let requested_model = eligible_model_for_tier(session, requested_plan.tier);
     let requested_effort = requested_plan
         .effort
         .clone()
@@ -410,6 +409,59 @@ pub fn tier_from_str(s: &str) -> Option<ModelTier> {
     }
 }
 
+/// Resolve Jev's abstract quality tier through its known-model capability map,
+/// then intersect that preference with the authenticated account catalogue.
+/// A static known model can inform the ordering, but can never become a route
+/// unless the provider advertised it for this session.
+fn eligible_model_for_tier(session: &Session, requested: ModelTier) -> String {
+    let eligible = if session.available_models.is_empty() {
+        vec![session.model.clone()]
+    } else {
+        session.available_models.clone()
+    };
+    let tier_order: &[ModelTier] = match requested {
+        ModelTier::Fast => &[
+            ModelTier::Fast,
+            ModelTier::Balanced,
+            ModelTier::Strong,
+            ModelTier::Frontier,
+        ],
+        ModelTier::Balanced => &[
+            ModelTier::Balanced,
+            ModelTier::Strong,
+            ModelTier::Fast,
+            ModelTier::Frontier,
+        ],
+        ModelTier::Strong => &[
+            ModelTier::Strong,
+            ModelTier::Frontier,
+            ModelTier::Balanced,
+            ModelTier::Fast,
+        ],
+        ModelTier::Frontier => &[
+            ModelTier::Frontier,
+            ModelTier::Strong,
+            ModelTier::Balanced,
+            ModelTier::Fast,
+        ],
+    };
+    for tier in tier_order {
+        let known = session.provider.model_for_tier(*tier);
+        if let Some(model) = eligible
+            .iter()
+            .find(|model| model.eq_ignore_ascii_case(known))
+        {
+            return model.clone();
+        }
+    }
+    eligible
+        .iter()
+        .find(|model| model.eq_ignore_ascii_case(&session.model))
+        .cloned()
+        .or_else(|| eligible.first().cloned())
+        .unwrap_or_else(|| session.model.clone())
+}
+
 /// Build a `JevClassifyRequest` from a raw user message + session metadata.
 /// Useful for tests and for callers that don't have an `Agent` state.
 pub fn build_request_from_session(
@@ -429,20 +481,11 @@ pub fn build_request_from_session_with_context(
     recent_messages: Vec<JevMessage>,
     last_turn_outcome: Option<JevTurnOutcome>,
 ) -> JevClassifyRequest {
-    let available_models = [
-        ModelTier::Fast,
-        ModelTier::Balanced,
-        ModelTier::Strong,
-        ModelTier::Frontier,
-    ]
-    .into_iter()
-    .map(|tier| session.provider.model_for_tier(tier).to_string())
-    .fold(Vec::new(), |mut models, model| {
-        if !models.contains(&model) {
-            models.push(model);
-        }
-        models
-    });
+    let available_models = if session.available_models.is_empty() {
+        vec![session.model.clone()]
+    } else {
+        session.available_models.clone()
+    };
     let mut available_efforts = session
         .handle
         .as_ref()
@@ -529,6 +572,12 @@ mod tests {
             working_dir: None,
             created_at: 0,
             permission_mode: crate::session::PermissionMode::Default,
+            available_models: vec![
+                "gpt-5.6-luna".into(),
+                "gpt-5.6-terra".into(),
+                "gpt-5.6-sol".into(),
+                "gpt-6-astra".into(),
+            ],
             handle: None,
         }
     }
@@ -562,6 +611,48 @@ mod tests {
         assert_eq!(decision.new_model, "gpt-5.5");
         assert_eq!(decision.new_effort, "high");
         assert_eq!(s.model, "gpt-5.5");
+    }
+
+    #[tokio::test]
+    async fn unavailable_known_model_is_never_requested() {
+        let classifier = MockJevClassifier::new();
+        classifier.set_plan(JevRoutePlan::passthrough(
+            ModelTier::Balanced,
+            Some("medium".into()),
+        ));
+
+        let mut s = session();
+        s.available_models = vec!["gpt-5.6-luna".into(), "gpt-5.6-sol".into()];
+        let decision = run_turn_with_jev(
+            Arc::new(classifier),
+            &s,
+            "implement this change",
+            0,
+            0,
+            None,
+            &RouterConfig::default(),
+            &std::path::PathBuf::from("/tmp/mona-test"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(decision.requested_model.as_deref(), Some("gpt-5.6-sol"));
+        assert_ne!(decision.requested_model.as_deref(), Some("gpt-5.6-terra"));
+    }
+
+    #[test]
+    fn classifier_sees_only_authenticated_models() {
+        let mut s = session();
+        s.available_models = vec!["gpt-5.6-luna".into(), "gpt-6-astra".into()];
+
+        let request = build_request_from_session("hello", &s, None);
+
+        assert_eq!(request.available_models, s.available_models);
+        assert!(
+            !request
+                .available_models
+                .contains(&"gpt-5.1-codex-mini".into())
+        );
     }
 
     #[tokio::test]

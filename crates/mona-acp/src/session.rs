@@ -119,6 +119,7 @@ impl DurableSession {
                 working_dir: self.working_dir,
                 created_at: self.created_at,
                 permission_mode: self.permission_mode,
+                available_models: Vec::new(),
                 // A handle is runtime-only. `resume` may rebuild one using
                 // currently available auth, but reload itself never does.
                 handle: None,
@@ -139,6 +140,9 @@ pub struct Session {
     pub working_dir: Option<String>,
     pub created_at: i64,
     pub permission_mode: PermissionMode,
+    /// Runtime-only, account-scoped models currently eligible for Jev. Static
+    /// known-model metadata must never be copied into this list.
+    pub available_models: Vec<String>,
     /// Real provider when authenticated; unavailable placeholder otherwise.
     pub handle: Option<ProviderHandle>,
 }
@@ -153,6 +157,7 @@ impl std::fmt::Debug for Session {
             .field("working_dir", &self.working_dir)
             .field("created_at", &self.created_at)
             .field("permission_mode", &self.permission_mode)
+            .field("available_models", &self.available_models)
             .field("handle", &self.handle)
             .finish()
     }
@@ -174,6 +179,7 @@ impl Session {
             working_dir,
             created_at: chrono::Utc::now().timestamp_millis(),
             permission_mode: PermissionMode::Default,
+            available_models: Vec::new(),
             handle,
         }
     }
@@ -299,6 +305,16 @@ impl SessionRegistry {
 
     pub fn get(&self, id: &str) -> Option<Session> {
         self.inner.lock().unwrap().sessions.get(id).cloned()
+    }
+
+    /// Update the runtime-only, account-scoped eligibility list used by Jev.
+    /// It is deliberately not persisted because provider entitlements can
+    /// change between process launches.
+    pub fn set_available_models(&self, id: &str, models: Vec<String>) -> Option<Session> {
+        let mut inner = self.inner.lock().unwrap();
+        let session = inner.sessions.get_mut(id)?;
+        session.available_models = models;
+        Some(session.clone())
     }
 
     pub fn cancel(&self, id: &str) -> bool {
@@ -445,6 +461,7 @@ impl SessionRegistry {
         session.provider = provider;
         session.model = actual_model;
         session.effort = actual_effort;
+        session.available_models.clear();
         session.handle = Some(replacement);
         let result = session.clone();
         self.persist_state(&next)?;

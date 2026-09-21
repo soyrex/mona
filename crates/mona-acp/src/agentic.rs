@@ -364,6 +364,7 @@ mod tests {
             working_dir: Some(cwd.display().to_string()),
             created_at: chrono::Utc::now().timestamp_millis(),
             permission_mode: crate::session::PermissionMode::Default,
+            available_models: vec![provider.model()],
             handle: Some(crate::provider::ProviderHandle {
                 provider,
                 auth: None,

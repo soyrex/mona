@@ -12,6 +12,7 @@ use mona_provider_core::{EventStream, Provider};
 use mona_provider_openai_runtime::OpenAIProvider;
 use mona_provider_openrouter_runtime::OpenRouterProvider;
 use std::sync::Arc;
+use tracing::warn;
 
 #[derive(Clone)]
 pub struct ProviderHandle {
@@ -71,6 +72,87 @@ impl ProviderHandle {
             provider_kind: self.provider_kind,
         })
     }
+}
+
+/// Return the models this handle's exact credential currently exposes.
+///
+/// Provider runtimes also carry broad, static "known model" lists. Those are
+/// useful capability metadata for Jev, but they are not proof that a specific
+/// account may select a model. ACP advertising and routing therefore use the
+/// authenticated provider catalogue first and only fall back to the already
+/// selected model when the live catalogue cannot be refreshed. Ambient cache
+/// state may belong to a different credential and is therefore not eligible.
+pub async fn authenticated_available_models(handle: &ProviderHandle) -> Vec<String> {
+    let live = match handle.auth.as_ref() {
+        Some(Auth::OpenaiOauth { access_token, .. }) => {
+            mona_base::provider::fetch_openai_model_catalog(access_token)
+                .await
+                .map(|catalog| catalog.available_models)
+        }
+        Some(Auth::OpenaiApiKey { api_key }) => {
+            mona_base::provider::fetch_openai_api_key_model_catalog(api_key)
+                .await
+                .map(|catalog| catalog.available_models)
+        }
+        Some(Auth::AnthropicOauth { access_token, .. }) => {
+            mona_base::provider::fetch_anthropic_model_catalog_oauth(access_token)
+                .await
+                .map(|catalog| catalog.available_models)
+        }
+        Some(Auth::AnthropicApiKey { api_key }) => {
+            mona_base::provider::fetch_anthropic_model_catalog(api_key)
+                .await
+                .map(|catalog| catalog.available_models)
+        }
+        Some(Auth::MinimaxApiKey { .. }) => Ok(handle.provider.available_models_for_switching()),
+        None => return Vec::new(),
+    };
+
+    let models = match live {
+        Ok(models) if !models.is_empty() => models,
+        Ok(_) => fallback_account_models(handle),
+        Err(error) => {
+            warn!(
+                provider = %handle.provider_kind.as_str(),
+                %error,
+                "authenticated model catalogue refresh failed; using safe provider fallback"
+            );
+            fallback_account_models(handle)
+        }
+    };
+    filter_provider_models(handle.provider_kind, models)
+}
+
+fn fallback_account_models(handle: &ProviderHandle) -> Vec<String> {
+    match handle.provider_kind {
+        SupportedProvider::Codex | SupportedProvider::Claude => None,
+        SupportedProvider::Minimax => Some(handle.provider.available_models_for_switching()),
+    }
+    .filter(|models| !models.is_empty())
+    .unwrap_or_else(|| vec![handle.provider.model()])
+}
+
+fn filter_provider_models(provider: SupportedProvider, models: Vec<String>) -> Vec<String> {
+    let mut filtered = Vec::new();
+    for model in models {
+        let model = model.trim();
+        if model.is_empty()
+            || validate_model_for_provider(provider, model).is_err()
+            || (provider == SupportedProvider::Codex
+                && (model.eq_ignore_ascii_case(mona_provider_core::CHATGPT_WEB_MODEL)
+                    || matches!(
+                        model.to_ascii_lowercase().as_str(),
+                        "gpt-reserve" | "codex-auto-review"
+                    )))
+            || filtered
+                .iter()
+                .any(|known: &String| known.eq_ignore_ascii_case(model))
+        {
+            continue;
+        }
+        filtered.push(model.to_string());
+    }
+    filtered
 }
 
 pub fn build_provider_for_session(

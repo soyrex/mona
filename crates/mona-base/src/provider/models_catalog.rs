@@ -92,6 +92,22 @@ pub(crate) fn parse_openai_model_catalog(data: &serde_json::Value) -> OpenAIMode
     let mut reasoning_efforts: HashMap<String, Vec<String>> = HashMap::new();
 
     for model in models.into_iter().flatten() {
+        // The Codex catalogue includes internal routing entries alongside
+        // models intended for a user-facing picker.  They are valid backend
+        // targets, but `visibility: "hide"` explicitly says they are not
+        // selectable for this account.  Keep those out of the account model
+        // snapshot so downstream clients cannot advertise or route to them.
+        if model
+            .get("visibility")
+            .and_then(|value| value.as_str())
+            .is_some_and(|visibility| !visibility.eq_ignore_ascii_case("list"))
+            || model
+                .get("hidden")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        {
+            continue;
+        }
         let Some(slug) = model
             .get("slug")
             .or_else(|| model.get("id"))
@@ -372,6 +388,19 @@ mod tests {
                 "xhigh".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn openai_catalog_excludes_models_hidden_from_the_account_picker() {
+        let catalog = parse_openai_model_catalog(&serde_json::json!({
+            "models": [
+                { "slug": "gpt-6-astra", "visibility": "list" },
+                { "slug": "gpt-reserve", "visibility": "hide" },
+                { "slug": "codex-auto-review", "hidden": true }
+            ]
+        }));
+
+        assert_eq!(catalog.available_models, vec!["gpt-6-astra"]);
     }
 }
 

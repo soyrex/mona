@@ -47,9 +47,9 @@ impl SupportedProvider {
     /// never the billing/auth backend.
     pub fn model_for_tier(&self, tier: ModelTier) -> &'static str {
         match (self, tier) {
-            (Self::Codex, ModelTier::Fast) => "gpt-5.1-codex-mini",
-            (Self::Codex, ModelTier::Balanced) => "gpt-5.4",
-            (Self::Codex, ModelTier::Strong) => "gpt-5.5",
+            (Self::Codex, ModelTier::Fast) => "gpt-5.6-luna",
+            (Self::Codex, ModelTier::Balanced) => "gpt-5.6-terra",
+            (Self::Codex, ModelTier::Strong) => "gpt-5.6-sol",
             (Self::Codex, ModelTier::Frontier) => "gpt-6-astra",
             (Self::Claude, ModelTier::Fast) => "claude-haiku-4-5",
             (Self::Claude, ModelTier::Balanced) => "claude-sonnet-4-6",

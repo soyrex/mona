@@ -111,13 +111,16 @@ impl SessionCounters {
         entry.last_swap_turn = Some(entry.turn_count);
     }
     fn cooldown_active(&self, id: &str, minimum_turns: u32) -> bool {
+        if minimum_turns == 0 {
+            return false;
+        }
         let Some(counter) = self.inner.get(id) else {
             return false;
         };
         let Some(last_swap_turn) = counter.last_swap_turn else {
             return false;
         };
-        counter.turn_count.saturating_sub(last_swap_turn) < minimum_turns.max(1)
+        counter.turn_count.saturating_sub(last_swap_turn) < minimum_turns
     }
     fn remove(&mut self, id: &str) {
         self.inner.remove(id);
@@ -341,6 +344,7 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
     };
     match new_session {
         Ok(session) => {
+            let (session, config_options, _) = refresh_session_config(session, state).await;
             let mcp_tool_count = mcp_tools.definitions().len();
             state
                 .session_mcp_tools
@@ -361,7 +365,7 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
                     "monitterPhase": "3.5",
                     "jev_routing": true,
                     "mcpToolCount": mcp_tool_count,
-                    "configOptions": session_config_options(&session, &state.auth.read().expect("auth registry lock poisoned")),
+                    "configOptions": config_options,
                 }),
             )
         }
@@ -409,6 +413,7 @@ async fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -
     };
     match resumed {
         Ok(s) => {
+            let (s, config_options, _) = refresh_session_config(s, state).await;
             let mcp_tool_count = mcp_tools.definitions().len();
             state
                 .session_mcp_tools
@@ -425,7 +430,7 @@ async fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -
                     "effort": info.effort,
                     "resumed": true,
                     "mcpToolCount": mcp_tool_count,
-                    "configOptions": session_config_options(&s, &state.auth.read().expect("auth registry lock poisoned")),
+                    "configOptions": config_options,
                 }),
             )
         }
@@ -471,8 +476,11 @@ fn parse_qualified_model_id(value: &str) -> Option<(SupportedProvider, &str)> {
 /// Advertise every model known by every currently authenticated Mona
 /// provider. Values are provider-qualified so identical model names can never
 /// silently cross credential or billing boundaries.
-fn model_config_option(session: &Session, auth: &AuthRegistry) -> Value {
-    let mut groups = Vec::new();
+async fn authenticated_model_catalogs(
+    session: &Session,
+    auth: &AuthRegistry,
+) -> HashMap<SupportedProvider, Vec<String>> {
+    let mut catalogs = HashMap::new();
     for provider in SupportedProvider::all() {
         if !auth.has_auth(*provider) {
             continue;
@@ -488,39 +496,31 @@ fn model_config_option(session: &Session, auth: &AuthRegistry) -> Value {
             .ok()
         };
         let Some(handle) = handle else { continue };
-        let mut models = Vec::<String>::new();
-        let mut add = |model: String| {
-            let model = model.trim().to_string();
-            if !model.is_empty() && !models.iter().any(|known| known == &model) {
-                models.push(model);
-            }
+        let models = crate::provider::authenticated_available_models(&handle).await;
+        if !models.is_empty() {
+            catalogs.insert(*provider, models);
+        }
+    }
+    catalogs
+}
+
+/// Build the picker strictly from per-credential catalogues. Static known
+/// models remain available to Jev as capability metadata, but never enter
+/// this eligibility list by themselves.
+fn model_config_option(
+    session: &Session,
+    catalogs: &HashMap<SupportedProvider, Vec<String>>,
+) -> Value {
+    let mut groups = Vec::new();
+    for provider in SupportedProvider::all() {
+        let Some(models) = catalogs.get(provider) else {
+            continue;
         };
-        if *provider == session.provider {
-            add(session.model.clone());
-        }
-        add(provider.default_model().to_string());
-        for tier in [
-            mona_jev::ModelTier::Fast,
-            mona_jev::ModelTier::Balanced,
-            mona_jev::ModelTier::Strong,
-            mona_jev::ModelTier::Frontier,
-        ] {
-            add(provider.model_for_tier(tier).to_string());
-        }
-        for model in handle.provider.available_models_for_switching() {
-            add(model);
-        }
-        for model in handle.provider.available_models_display() {
-            add(model);
-        }
-        for model in handle.provider.available_models() {
-            add(model.to_string());
-        }
         let options = models
-            .into_iter()
+            .iter()
             .map(|model| {
                 json!({
-                    "value": qualified_model_id(*provider, &model),
+                    "value": qualified_model_id(*provider, model),
                     "name": model,
                     "description": format!("{} via Mona", provider.display_name()),
                 })
@@ -545,11 +545,33 @@ fn model_config_option(session: &Session, auth: &AuthRegistry) -> Value {
     })
 }
 
-fn session_config_options(session: &Session, auth: &AuthRegistry) -> Vec<Value> {
+fn session_config_options(
+    session: &Session,
+    catalogs: &HashMap<SupportedProvider, Vec<String>>,
+) -> Vec<Value> {
     vec![
-        model_config_option(session, auth),
+        model_config_option(session, catalogs),
         permission_config_option(session.permission_mode),
     ]
+}
+
+async fn refresh_session_config(
+    session: Session,
+    state: &ServerState,
+) -> (Session, Vec<Value>, HashMap<SupportedProvider, Vec<String>>) {
+    let auth = state
+        .auth
+        .read()
+        .expect("auth registry lock poisoned")
+        .clone();
+    let catalogs = authenticated_model_catalogs(&session, &auth).await;
+    let current_models = catalogs.get(&session.provider).cloned().unwrap_or_default();
+    let session = state
+        .sessions
+        .set_available_models(&session.id, current_models)
+        .unwrap_or(session);
+    let options = session_config_options(&session, &catalogs);
+    (session, options, catalogs)
 }
 
 async fn handle_session_set_config_option(
@@ -596,14 +618,19 @@ async fn handle_session_set_config_option(
             let Some((provider, model)) = parse_qualified_model_id(value) else {
                 return jsonrpc_error(id, -32602, "model must be a provider-qualified id");
             };
-            let auth = state.auth.read().expect("auth registry lock poisoned");
+            let auth = state
+                .auth
+                .read()
+                .expect("auth registry lock poisoned")
+                .clone();
             let current = match state.sessions.get(session_id) {
                 Some(session) => session,
                 None => {
                     return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found"));
                 }
             };
-            let advertised = model_config_option(&current, &auth);
+            let catalogs = authenticated_model_catalogs(&current, &auth).await;
+            let advertised = model_config_option(&current, &catalogs);
             let allowed = advertised["options"]
                 .as_array()
                 .into_iter()
@@ -632,10 +659,7 @@ async fn handle_session_set_config_option(
             );
         }
     };
-    let config_options = session_config_options(
-        &updated,
-        &state.auth.read().expect("auth registry lock poisoned"),
-    );
+    let (updated, config_options, _) = refresh_session_config(updated, state).await;
     push_notification(
         &writer,
         &updated.id,
@@ -2443,9 +2467,11 @@ mod tests {
     #[test]
     fn safe_auto_cooldown_counts_from_last_successful_swap() {
         let mut counters = SessionCounters::default();
+        assert!(!counters.cooldown_active("session", 0));
         let entry = counters.get_or_insert("session");
         entry.turn_count = 5;
         counters.record_swap("session");
+        assert!(!counters.cooldown_active("session", 0));
         assert!(counters.cooldown_active("session", 2));
 
         counters.get_or_insert("session").turn_count = 6;
@@ -2604,7 +2630,11 @@ mod tests {
             .flat_map(|group| group["options"].as_array().unwrap())
             .filter_map(|option| option["value"].as_str())
             .collect::<Vec<_>>();
-        assert!(values.contains(&"codex/gpt-5.6-luna"));
+        // The fake OpenAI credential cannot return a live catalogue, so the
+        // only safe fallback is the already-selected model. Static known
+        // models (for example gpt-5.4) must not leak into eligibility.
+        assert!(values.contains(&"codex/gpt-5.5"));
+        assert!(!values.contains(&"codex/gpt-5.4"));
         assert!(values.contains(&"minimax/MiniMax-M3"));
         assert_eq!(model["currentValue"], "codex/gpt-5.5");
 
