@@ -21,6 +21,35 @@ pub const MAX_RECENT_MESSAGES: usize = 8;
 /// A single message must not make a durable record unexpectedly large.
 pub const MAX_CONTEXT_MESSAGE_CHARS: usize = 8 * 1024;
 
+/// The ACP host's per-session tool approval policy. This is deliberately
+/// fail-closed: missing legacy state and unknown callers both use `Default`,
+/// which continues to ask the host before a protected action.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PermissionMode {
+    #[default]
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "bypassPermissions")]
+    BypassPermissions,
+}
+
+impl PermissionMode {
+    pub const fn as_acp_value(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::BypassPermissions => "bypassPermissions",
+        }
+    }
+
+    pub fn from_acp_value(value: &str) -> Option<Self> {
+        match value {
+            "default" => Some(Self::Default),
+            "bypassPermissions" => Some(Self::BypassPermissions),
+            _ => None,
+        }
+    }
+}
+
 /// Bounded context carried across a process restart for routing only.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +85,10 @@ struct DurableSession {
     effort: String,
     working_dir: Option<String>,
     created_at: i64,
+    /// Absent in pre-permission-mode durable state; serde defaults it to the
+    /// safe prompt-per-tool behavior rather than silently granting access.
+    #[serde(default)]
+    permission_mode: PermissionMode,
     #[serde(default)]
     context: SessionRoutingContext,
 }
@@ -69,6 +102,7 @@ impl From<(&Session, SessionRoutingContext)> for DurableSession {
             effort: session.effort.clone(),
             working_dir: session.working_dir.clone(),
             created_at: session.created_at,
+            permission_mode: session.permission_mode,
             context,
         }
     }
@@ -84,6 +118,7 @@ impl DurableSession {
                 effort: self.effort,
                 working_dir: self.working_dir,
                 created_at: self.created_at,
+                permission_mode: self.permission_mode,
                 // A handle is runtime-only. `resume` may rebuild one using
                 // currently available auth, but reload itself never does.
                 handle: None,
@@ -103,6 +138,7 @@ pub struct Session {
     pub effort: String,
     pub working_dir: Option<String>,
     pub created_at: i64,
+    pub permission_mode: PermissionMode,
     /// Real provider when authenticated; unavailable placeholder otherwise.
     pub handle: Option<ProviderHandle>,
 }
@@ -116,6 +152,7 @@ impl std::fmt::Debug for Session {
             .field("effort", &self.effort)
             .field("working_dir", &self.working_dir)
             .field("created_at", &self.created_at)
+            .field("permission_mode", &self.permission_mode)
             .field("handle", &self.handle)
             .finish()
     }
@@ -136,6 +173,7 @@ impl Session {
             effort,
             working_dir,
             created_at: chrono::Utc::now().timestamp_millis(),
+            permission_mode: PermissionMode::Default,
             handle,
         }
     }
@@ -313,6 +351,29 @@ impl SessionRegistry {
         } else {
             false
         }
+    }
+
+    /// Persist a permission-mode change atomically. The live registry is only
+    /// changed once its replacement durable file has been committed.
+    pub fn set_permission_mode(
+        &self,
+        id: &str,
+        permission_mode: PermissionMode,
+    ) -> Result<Session, SessionError> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut next = RegistryState {
+            sessions: inner.sessions.clone(),
+            contexts: inner.contexts.clone(),
+        };
+        let session = next
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_owned()))?;
+        session.permission_mode = permission_mode;
+        let result = session.clone();
+        self.persist_state(&next)?;
+        *inner = next;
+        Ok(result)
     }
 
     /// Reconfigure an existing authenticated session's live provider. The
@@ -831,6 +892,55 @@ mod tests {
             context.last_turn_outcome,
             Some(JevTurnOutcome::Uncertain { ref reason }) if reason == "tool output needs review"
         ));
+    }
+
+    #[test]
+    fn permission_mode_is_fail_closed_and_survives_durable_reload() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        let session = registry
+            .new_session("codex", None, None, None, &registry_with_all())
+            .unwrap();
+        assert_eq!(session.permission_mode, PermissionMode::Default);
+
+        let updated = registry
+            .set_permission_mode(&session.id, PermissionMode::BypassPermissions)
+            .unwrap();
+        assert_eq!(updated.permission_mode, PermissionMode::BypassPermissions);
+        let serialized = std::fs::read_to_string(registry.state_path().unwrap()).unwrap();
+        assert!(serialized.contains("\"permissionMode\": \"bypassPermissions\""));
+
+        let reloaded = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        assert_eq!(
+            reloaded.get(&session.id).unwrap().permission_mode,
+            PermissionMode::BypassPermissions
+        );
+    }
+
+    #[test]
+    fn legacy_durable_session_without_permission_mode_defaults_to_ask() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("sessions.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "sessions": [{
+                    "id": "legacy-session",
+                    "provider": "Codex",
+                    "model": "gpt-5.5",
+                    "effort": "none",
+                    "workingDir": null,
+                    "createdAt": 1,
+                }],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let registry = SessionRegistry::with_state_dir(temp.path()).unwrap();
+        assert_eq!(
+            registry.get("legacy-session").unwrap().permission_mode,
+            PermissionMode::Default
+        );
     }
 
     #[test]

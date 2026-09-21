@@ -17,7 +17,7 @@ use crate::auth::AuthRegistry;
 use crate::initialize::initialize_result;
 use crate::mcp::SessionMcpTools;
 use crate::policy::JevRoutePolicy;
-use crate::session::{SessionInfo, SessionRegistry};
+use crate::session::{PermissionMode, SessionInfo, SessionRegistry};
 use crate::trace::{RouterTrace, TraceTrigger};
 use crate::turn::{
     RouterConfig, decision_to_router_trace_value, finalize_routing_decision,
@@ -269,6 +269,9 @@ pub async fn handle_frame(line: &str, state: &ServerState, writer: SharedWriter)
         "session/auth" => handle_session_auth(id, &params, state),
         "session/jev_route" => handle_session_jev_route(id, &params, state).await,
         "session/prompt" => handle_session_prompt(id, &params, state, writer).await,
+        "session/set_config_option" => {
+            handle_session_set_config_option(id, &params, state, writer).await
+        }
         "session/set_model" => handle_session_set_model(id, &params, state).await,
         "session/set_reasoning_effort" => {
             handle_session_set_reasoning_effort(id, &params, state).await
@@ -357,6 +360,7 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
                     "monitterPhase": "3.5",
                     "jev_routing": true,
                     "mcpToolCount": mcp_tool_count,
+                    "configOptions": permission_config_options(session.permission_mode),
                 }),
             )
         }
@@ -420,6 +424,7 @@ async fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -
                     "effort": info.effort,
                     "resumed": true,
                     "mcpToolCount": mcp_tool_count,
+                    "configOptions": permission_config_options(s.permission_mode),
                 }),
             )
         }
@@ -433,6 +438,93 @@ async fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -
         ),
         Err(error) => jsonrpc_error(id, -32603, &format!("could not resume session: {error}")),
     }
+}
+
+/// The permission selector is intentionally small and exact. Monitter treats
+/// `bypassPermissions` as an authority-bearing contract, rather than guessing
+/// it from a harness name or a presentation category.
+fn permission_config_options(mode: PermissionMode) -> Vec<Value> {
+    vec![json!({
+        "id": "permissionMode",
+        "name": "Permission mode",
+        "category": "_permission",
+        "type": "select",
+        "currentValue": mode.as_acp_value(),
+        "options": [
+            { "value": "default", "name": "Ask before running tools" },
+            { "value": "bypassPermissions", "name": "Bypass permissions" },
+        ],
+    })]
+}
+
+async fn handle_session_set_config_option(
+    id: Value,
+    params: &Value,
+    state: &ServerState,
+    writer: SharedWriter,
+) -> Value {
+    let session_id = match params.get("sessionId").and_then(Value::as_str) {
+        Some(session_id) if !session_id.is_empty() => session_id,
+        _ => return jsonrpc_error(id, -32602, "missing sessionId"),
+    };
+    let config_id = match params.get("configId").and_then(Value::as_str) {
+        Some(config_id) => config_id,
+        None => return jsonrpc_error(id, -32602, "missing configId"),
+    };
+    if config_id != "permissionMode" {
+        return jsonrpc_error(id, -32602, &format!("unknown configId `{config_id}`"));
+    }
+    let value = match params.get("value").and_then(Value::as_str) {
+        Some(value) => value,
+        None => return jsonrpc_error(id, -32602, "missing config value"),
+    };
+    let permission_mode = match PermissionMode::from_acp_value(value) {
+        Some(mode) => mode,
+        None => {
+            return jsonrpc_error(
+                id,
+                -32602,
+                &format!("invalid value `{value}` for permissionMode"),
+            );
+        }
+    };
+
+    // A prompt snapshots this setting before it opens the agent loop. Reject
+    // any race instead of allowing a mid-turn permission escalation.
+    if state.inflight_turns.lock().await.contains_key(session_id) {
+        return jsonrpc_error(
+            id,
+            -32000,
+            "cannot change permission mode while a prompt is active",
+        );
+    }
+    let updated = match state
+        .sessions
+        .set_permission_mode(session_id, permission_mode)
+    {
+        Ok(session) => session,
+        Err(crate::session::SessionError::NotFound(_)) => {
+            return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found"));
+        }
+        Err(error) => {
+            return jsonrpc_error(
+                id,
+                -32603,
+                &format!("could not persist permission mode: {error}"),
+            );
+        }
+    };
+    let config_options = permission_config_options(updated.permission_mode);
+    push_notification(
+        &writer,
+        &updated.id,
+        json!({
+            "sessionUpdate": "config_option_update",
+            "configOptions": config_options,
+        }),
+    )
+    .await;
+    jsonrpc_result(id, json!({ "configOptions": config_options }))
 }
 
 async fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -> Value {
@@ -626,10 +718,6 @@ async fn handle_session_prompt(
     // bridge, ...) work without a custom envelope.
     let text = extract_prompt_text(params);
 
-    let mut session = match state.sessions.get(&session_id) {
-        Some(s) => s,
-        None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
-    };
     let cancellation = CancellationToken::new();
     let mut inflight = state.inflight_turns.lock().await;
     if inflight.contains_key(&session_id) {
@@ -637,6 +725,17 @@ async fn handle_session_prompt(
     }
     inflight.insert(session_id.clone(), cancellation.clone());
     drop(inflight);
+    // Registering the turn closes the setter race before reading its mode.
+    // `session/set_config_option` now rejects changes and this snapshot is
+    // therefore immutable for every tool in this prompt.
+    let mut session = match state.sessions.get(&session_id) {
+        Some(s) => s,
+        None => {
+            state.inflight_turns.lock().await.remove(&session_id);
+            return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found"));
+        }
+    };
+    let prompt_permission_mode = session.permission_mode;
     if cancellation.is_cancelled() {
         state.inflight_turns.lock().await.remove(&session_id);
         return jsonrpc_error(id, -32800, "session prompt cancelled");
@@ -876,6 +975,7 @@ async fn handle_session_prompt(
         state.pending_client_responses.clone(),
         state.client_closed.clone(),
         cancellation.clone(),
+        prompt_permission_mode,
     );
     let mcp_tools = state
         .session_mcp_tools
@@ -953,6 +1053,17 @@ pub(crate) struct PromptOutcome {
     pub stop_reason: Option<String>,
     pub usage: Option<(u64, u64)>,
     pub error: Option<String>,
+}
+
+/// Provider protocols commonly call a normal completed response `stop`; ACP
+/// calls that same terminal state `end_turn`. Normalize only that successful
+/// spelling at the transport boundary: cancellation, refusal, token limits,
+/// and provider-specific failures remain observable to the host unchanged.
+fn normalize_stop_reason(stop_reason: Option<String>) -> Option<String> {
+    match stop_reason.as_deref() {
+        Some("stop") => Some("end_turn".to_string()),
+        _ => stop_reason,
+    }
 }
 
 async fn drive_canonical_agent(
@@ -1121,10 +1232,12 @@ async fn drive_canonical_agent(
                     .await;
                 }
                 "message_end" => {
-                    outcome.stop_reason = value
-                        .get("stop_reason")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
+                    outcome.stop_reason = normalize_stop_reason(
+                        value
+                            .get("stop_reason")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    );
                 }
                 "retry_rollback" => {
                     // The Agent is about to replay the provider response from
@@ -1244,6 +1357,7 @@ struct AcpPermission {
     pending: PendingClientResponses,
     client_closed: Arc<AtomicBool>,
     cancellation: CancellationToken,
+    mode: PermissionMode,
 }
 
 impl AcpPermission {
@@ -1253,6 +1367,7 @@ impl AcpPermission {
         pending: PendingClientResponses,
         client_closed: Arc<AtomicBool>,
         cancellation: CancellationToken,
+        mode: PermissionMode,
     ) -> Self {
         Self {
             session_id,
@@ -1260,6 +1375,7 @@ impl AcpPermission {
             pending,
             client_closed,
             cancellation,
+            mode,
         }
     }
 }
@@ -1270,6 +1386,9 @@ impl Permission for AcpPermission {
         request: &'a PermissionRequest,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionDecision> + Send + 'a>> {
         Box::pin(async move {
+            if self.mode == PermissionMode::BypassPermissions {
+                return PermissionDecision::AllowOnce;
+            }
             if self.client_closed.load(Ordering::Acquire) {
                 return PermissionDecision::RejectOnce;
             }
@@ -1610,7 +1729,7 @@ async fn drive_provider_stream_with_cancellation(
                     .await;
                 }
                 Ok(StreamEvent::MessageEnd { stop_reason }) => {
-                    outcome.stop_reason = stop_reason;
+                    outcome.stop_reason = normalize_stop_reason(stop_reason);
                 }
                 Ok(StreamEvent::Error {
                     message,
@@ -2216,6 +2335,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn permission_mode_is_advertised_set_validated_and_persisted() {
+        let home = tempfile::tempdir().unwrap();
+        let state = ServerState::new(
+            home.path().to_path_buf(),
+            Arc::new(mona_jev::MockJevClassifier::new()),
+        );
+        let advertised =
+            handle_session_new(json!(0), &json!({ "provider": "codex" }), &state).await;
+        assert_eq!(
+            advertised["result"]["configOptions"][0]["currentValue"],
+            "default"
+        );
+        assert_eq!(advertised["result"]["configOptions"][0]["type"], "select");
+        let session = state
+            .sessions
+            .new_session("codex", None, None, None, &AuthRegistry::default())
+            .unwrap();
+        let (writer, output) = shared_writer();
+
+        let result = handle_session_set_config_option(
+            json!(1),
+            &json!({
+                "sessionId": session.id,
+                "configId": "permissionMode",
+                "value": "bypassPermissions",
+            }),
+            &state,
+            writer,
+        )
+        .await;
+        assert_eq!(result["result"]["configOptions"][0]["id"], "permissionMode");
+        assert_eq!(
+            result["result"]["configOptions"][0]["category"],
+            "_permission"
+        );
+        assert_eq!(
+            result["result"]["configOptions"][0]["currentValue"],
+            "bypassPermissions"
+        );
+        assert!(
+            result["result"]["configOptions"][0]["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|option| option["value"] == "default")
+        );
+        assert_eq!(
+            state.sessions.get(&session.id).unwrap().permission_mode,
+            PermissionMode::BypassPermissions
+        );
+        let persisted = SessionRegistry::with_state_dir(home.path().join("sessions")).unwrap();
+        assert_eq!(
+            persisted.get(&session.id).unwrap().permission_mode,
+            PermissionMode::BypassPermissions
+        );
+        state.auth.write().unwrap().inner_mut().insert(
+            SupportedProvider::Codex,
+            crate::auth::Auth::OpenaiApiKey {
+                api_key: "test-key".to_string(),
+            },
+        );
+        let resumed =
+            handle_session_resume(json!(5), &json!({ "sessionId": session.id }), &state).await;
+        assert_eq!(
+            resumed["result"]["configOptions"][0]["currentValue"],
+            "bypassPermissions"
+        );
+        let notifications = read_lines(output).await;
+        assert_eq!(
+            notifications[0]["params"]["update"]["sessionUpdate"],
+            "config_option_update"
+        );
+
+        let invalid = handle_session_set_config_option(
+            json!(2),
+            &json!({ "sessionId": session.id, "configId": "unknown", "value": "default" }),
+            &state,
+            shared_writer().0,
+        )
+        .await;
+        assert_eq!(invalid["error"]["code"], -32602);
+        let invalid_value = handle_session_set_config_option(
+            json!(3),
+            &json!({ "sessionId": session.id, "configId": "permissionMode", "value": "unsafe" }),
+            &state,
+            shared_writer().0,
+        )
+        .await;
+        assert_eq!(invalid_value["error"]["code"], -32602);
+
+        state
+            .inflight_turns
+            .lock()
+            .await
+            .insert(session.id.clone(), CancellationToken::new());
+        let active = handle_session_set_config_option(
+            json!(4),
+            &json!({ "sessionId": session.id, "configId": "permissionMode", "value": "default" }),
+            &state,
+            shared_writer().0,
+        )
+        .await;
+        assert_eq!(active["error"]["code"], -32000);
+    }
+
+    #[test]
+    fn normalizes_only_provider_stop_to_acp_end_turn() {
+        assert_eq!(normalize_stop_reason(None), None);
+        assert_eq!(
+            normalize_stop_reason(Some("stop".to_string())).as_deref(),
+            Some("end_turn")
+        );
+        for reason in ["cancelled", "refusal", "max_tokens", "error"] {
+            assert_eq!(
+                normalize_stop_reason(Some(reason.to_string())).as_deref(),
+                Some(reason)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn session_cancel_interrupts_blocked_stream_without_later_activity() {
         let home = std::env::temp_dir().join(format!("mona-acp-cancel-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&home).unwrap();
@@ -2286,7 +2526,9 @@ mod tests {
                 cache_creation_input_tokens: None,
             }),
             Ok(StreamEvent::MessageEnd {
-                stop_reason: Some("end_turn".into()),
+                // OpenAI-compatible provider streams spell a successful
+                // completion `stop`; ACP clients require `end_turn`.
+                stop_reason: Some("stop".into()),
             }),
         ]);
 
@@ -2464,6 +2706,7 @@ mod tests {
             pending.clone(),
             Arc::new(AtomicBool::new(false)),
             CancellationToken::new(),
+            PermissionMode::Default,
         ));
         let request_task = {
             let permission = permission.clone();
@@ -2569,6 +2812,30 @@ mod tests {
         );
         assert_eq!(reject_task.await.unwrap(), PermissionDecision::RejectOnce);
         assert!(pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bypass_permission_approves_without_emitting_a_request() {
+        let (writer, output) = shared_writer();
+        let permission = AcpPermission::new(
+            "session-1".into(),
+            writer,
+            Arc::new(AsyncMutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+            CancellationToken::new(),
+            PermissionMode::BypassPermissions,
+        );
+        assert_eq!(
+            permission
+                .request(&PermissionRequest {
+                    request_id: "tool-1".into(),
+                    tool_name: "bash".into(),
+                    input: json!({"command": "pwd"}),
+                })
+                .await,
+            PermissionDecision::AllowOnce
+        );
+        assert!(read_lines(output).await.is_empty());
     }
 
     #[tokio::test]

@@ -528,6 +528,7 @@ mod tests {
             effort: "high".into(),
             working_dir: None,
             created_at: 0,
+            permission_mode: crate::session::PermissionMode::Default,
             handle: None,
         }
     }

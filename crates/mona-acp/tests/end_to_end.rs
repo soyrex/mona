@@ -7,6 +7,7 @@
 //! - `session/new` with `provider=codex` returns a valid sessionId and
 //!   defaults to `gpt-5.5` / effort `high`.
 //! - `session/list` includes the freshly created session.
+//! - `session/set_config_option` enables the advertised full-access mode.
 //! - `session/prompt` reports unauthenticated cleanly when no provider
 //!   credential is configured (live provider turns remain opt-in).
 //! - `session/set_model` and `session/set_reasoning_effort` reject an
@@ -125,7 +126,11 @@ fn full_session_lifecycle() {
     // send session/new, read the response, send the follow-up frames
     // referencing the captured sessionId, all on the same child process.
 
+    // Keep this lifecycle deterministic even when the developer has real
+    // provider credentials in their normal Mona home.
+    let home = tempfile::tempdir().expect("temporary Mona home");
     let mut child = Command::new(&bin)
+        .env("MONA_HOME", home.path())
         .env("MONA_ACP_LOG", "error")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -153,6 +158,31 @@ fn full_session_lifecycle() {
     assert_eq!(new_resp["result"]["model"], "gpt-5.5");
     assert_eq!(new_resp["result"]["effort"], "high");
     assert_eq!(new_resp["result"]["provider"], "codex");
+    assert_eq!(
+        new_resp["result"]["configOptions"][0]["currentValue"],
+        "default"
+    );
+    assert!(
+        new_resp["result"]["configOptions"][0]["options"]
+            .as_array()
+            .expect("permission options")
+            .iter()
+            .any(|option| option["value"] == "bypassPermissions")
+    );
+
+    // The host can explicitly enable full access using only the advertised
+    // opaque selector. The config update notification may precede the RPC
+    // response, so read until the matching id arrives.
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":6,"method":"session/set_config_option","params":{{"sessionId":"{session_id}","configId":"permissionMode","value":"bypassPermissions"}}}}"#
+    )
+    .expect("write permission mode");
+    let permission_resp = read_response_for_id(&mut reader, 6);
+    assert_eq!(
+        permission_resp["result"]["configOptions"][0]["currentValue"],
+        "bypassPermissions"
+    );
 
     // 2. session/prompt — no auth is configured for this session, so the
     //    handler must surface `unauthenticated` (-32002) rather than
