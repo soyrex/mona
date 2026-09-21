@@ -4,40 +4,44 @@
 
 ## Status
 
-Phase 1 shipped on a buildable, runnable binary.
+Phases 1 and 2 are complete on buildable, runnable binaries.
 
 - The full `jcode` workspace (82 crates, ~80k lines) has been renamed to `mona`/`mona-*`.
-- The CLI surface is restricted to a single command: `mona acp`.
-- All other commands from upstream are intentionally unreachable; they error with a hint to use `mona acp`.
+- The legacy CLI surface is restricted to a single command: `mona acp`.
+- All other commands from upstream are intentionally unreachable; they error with a hint to use `mona acp` or the dedicated `mona-acp` binary.
+- The dedicated `mona-acp` binary owns the Monitter ACP lifecycle, per-turn
+  routing, bounded tools, persistence, cancellation, and routing traces.
 
 ## What this binary does
 
-`mona acp` runs as an [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol) (ACP) stdio server. It accepts JSON-RPC 2.0 frames on stdin and emits ACP events on stdout. The protocol surface is the same one `jcode` already shipped via `jcode acp`; we have not changed it in Phase 1.
+`mona-acp` runs as an [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol) (ACP) stdio server. It accepts JSON-RPC 2.0 frames on stdin and emits ACP events on stdout. The legacy `mona acp` entry point remains the Phase 1 compatibility surface; Monitter should discover and launch the dedicated binary.
 
 To integrate:
 
 ```sh
-# One-time provider setup (until Phase 2 adds a dedicated login flow).
+# Provider credentials remain host-owned and reloadable; mona-acp never
+# refreshes OAuth or changes accounts implicitly.
 # Place credentials at one of:
-#   ~/.mona/openai-auth.json         (OpenAI OAuth)
-#   ~/.mona/anthropic-auth.json      (Anthropic OAuth/API key)
-#   ~/.mona/openrouter.json          (OpenRouter API key)
+#   ~/.mona/codex.json               (OpenAI OAuth/API key)
+#   ~/.mona/claude.json              (Anthropic OAuth/API key)
+#   ~/.mona/minimax.json             (MiniMax API key)
 #   …or set the standard env vars:
 #   OPENAI_API_KEY=...
 #   ANTHROPIC_API_KEY=...
+#   MINIMAX_API_KEY=...
 
 # Launch the ACP server on stdio (e.g. from Monitter desktop):
-mona acp
+mona-acp
 ```
 
-ACP clients (Monitter desktop, mobile, share-web) drive `mona acp` via stdio JSON-RPC. No socket, no daemon, no port.
+ACP clients (Monitter desktop, mobile, share-web) drive `mona-acp` via stdio JSON-RPC. No socket, no daemon, no port.
 
 ## Building
 
 ```sh
 cargo build --release --bin mona --no-default-features
-# Output: target/release/mona (~59 MB Mach-O arm64, includes all upstream
-# provider + tool + agent-runtime crates; Phase 1 strip is surface-only).
+cargo build --release --bin mona-acp
+# Outputs: target/release/mona and target/release/mona-acp.
 ```
 
 Note: AWS Bedrock support requires Rust 1.94.1+. Disable the `bedrock` feature (default-off via `--no-default-features`) if your toolchain is 1.94.0 or older. This is a transitive constraint of upstream's `aws-sdk-*` deps and is unchanged from `jcode`.
@@ -57,11 +61,33 @@ Note: AWS Bedrock support requires Rust 1.94.1+. Disable the `bedrock` feature (
 
 We **do not** maintain a fork relationship with upstream's issue tracker. For fork-specific issues, open them on `github.com/soyrex/mona`. For upstream issues, open them on `github.com/1jehuang/jcode`.
 
+## Phase 2 architecture
+
+Phase 2 uses a narrow ACP-owned provider loop instead of routing ACP tools
+through the full upstream `Agent` registry. This is deliberate: the upstream
+`Agent::run_turn` API executes registered tools directly and has no ACP
+permission callback. Reusing it unchanged would bypass Monitter's one-time
+permission boundary or expose a much larger tool surface. The dedicated loop
+keeps the same provider stream types while limiting execution to the reviewed
+`mona-acp-tools` registry, an eight-round bound, and `allow_once`/`reject_once`
+host decisions.
+
+The server persists bounded, redacted session context under `MONA_HOME`,
+reconstructs provider handles only from current non-expired credentials,
+supports concurrent in-flight cancellation, and emits requested-versus-actual
+`router_trace` updates. `off`, `recommend`, `safe_auto`, and `per_turn` routing
+policies never change provider/account ownership or widen tool permissions.
+
+Live Jev classification is network-off by default. Operators must explicitly
+set `MONA_ACP_LIVE_JEV=1`; any other value keeps the deterministic rule-based
+classifier. `MONA_ACP_JEV_PROVIDER` independently selects `auto`, `mona`,
+`openrouter`, `typesafe`, or `aimlapi` from already configured credentials.
+Mona does not copy credentials into session state or traces, and an unavailable
+live configuration visibly falls back to the offline classifier. The
+subscription route separately requires the `acp_jev` account capability.
+
 ## Next phases
 
-This is Phase 1. The remaining phases (each its own milestone, each its own commit):
-
-- **Phase 2** — A dedicated `mona-acp` crate that owns the ACP server loop with the per-turn Jev routing hook embedded in `Agent::run_turn`. The current `mona acp` is upstream's ACP implementation with a stripped CLI; Phase 2 builds a Monitter-native replacement.
 - **Phase 3** — Cosmetic CLI strings (the help text still says `J-Code`, `Jcode daemon`, etc.) moved into the Monitter-owned `mona-acp` crate.
 - **Phase 4** — Remove unused TUI/presentation crates from the workspace (`mona-tui*`, `mona-pdf`, `mona-render-core`, `mona-notify-email`, etc.). See `FUTURE-CLEANUPS.md`.
 

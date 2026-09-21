@@ -2,10 +2,8 @@
 //! writes responses to stdout.
 
 use anyhow::Result;
-use mona_acp::ServerState;
-use mona_jev::{JevClassifier, RuleBasedClassifier};
+use mona_acp::{ClassifierStartup, ServerState, classifier_from_environment};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 /// Resolve the mona home directory.
@@ -20,12 +18,6 @@ fn home_dir() -> PathBuf {
         return PathBuf::from(home).join(".mona");
     }
     std::env::temp_dir().join("mona")
-}
-
-/// Build the default classifier. Operators can later swap in a live
-/// classifier (Phase 2.5+); for now we use the rule-based one.
-fn default_classifier() -> Arc<dyn JevClassifier> {
-    Arc::new(RuleBasedClassifier::new())
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -47,7 +39,20 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&home).ok();
     std::fs::create_dir_all(home.join("router-traces")).ok();
 
-    let state = ServerState::new(home.clone(), default_classifier());
+    let (classifier, classifier_startup) = classifier_from_environment();
+    match classifier_startup {
+        ClassifierStartup::Live => tracing::info!("live Jev ACP classifier enabled"),
+        ClassifierStartup::RuleBasedDisabled => tracing::info!(
+            "using offline rule-based classifier; set MONA_ACP_LIVE_JEV=1 to opt into live Jev ACP routing"
+        ),
+        ClassifierStartup::RuleBasedInvalidOptIn => tracing::warn!(
+            "MONA_ACP_LIVE_JEV must be exactly 1; using offline rule-based classifier"
+        ),
+        ClassifierStartup::RuleBasedUnavailable => tracing::warn!(
+            "live Jev ACP opt-in has no usable ACP configuration; using offline rule-based classifier"
+        ),
+    }
+    let state = ServerState::new(home.clone(), classifier);
     tracing::info!(?home, "mona-acp starting");
     mona_acp::run_acp_server(state).await
 }

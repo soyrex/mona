@@ -1,6 +1,6 @@
 //! Per-turn routing hook — the Jev classification + safety + apply pipeline.
 //!
-//! This is the core of Phase 2.5. `run_turn_with_jev` is called from the
+//! `run_turn_with_jev` is called from the
 //! `session/prompt` handler and does the following, in order:
 //!
 //! 1. Build a [`JevClassifyRequest`] from the user's prompt + session

@@ -2,14 +2,13 @@
 //!
 //! The trait shape mirrors `src-tauri/src/model_router.rs:380` in the Monitter
 //! desktop codebase (the original `JevClassifier` from which this is ported)
-//! with two simplifications appropriate to the embedded-in-agent-loop use:
+//! with boundaries appropriate to the embedded-in-agent-loop use:
 //!
-//! 1. **No HTTP layer here.** Phase 2 ships with an in-memory mock classifier.
-//!    Live HTTP calls to the Jev endpoint land in Phase 2.5.
-//! 2. **No Keychain dependency.** The `live` classifier (Phase 2.5) will read
-//!    the JEV API key from `std::env::var("MONA_JEV_API_KEY")` for non-macOS
-//!    builds and from the macOS Keychain in production. Phase 2's mock needs
-//!    neither.
+//! 1. **No HTTP layer here.** The ACP crate owns the opt-in adapter and uses the
+//!    shared `mona-base` typed Decisions transport. This crate remains the pure
+//!    routing contract plus deterministic offline classifier.
+//! 2. **No credential dependency.** Credentials stay in the shared transport;
+//!    classifiers, plans, persisted sessions, and traces never contain them.
 //!
 //! Every method and type here is `pub` so `crates/mona-acp/` can drive
 //! per-turn classification without duplicating the trait.

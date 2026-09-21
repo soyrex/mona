@@ -57,6 +57,7 @@ budget is enforced before runtime mutation.
 - `cargo check -p mona-acp`
 - injected provider-runtime regression tests for OpenAI, Anthropic, and
   OpenRouter
+- fixture-backed live Decisions adapter tests with no credentials or network
 
 Coverage includes provider-scoped tier resolution, successful model and effort
 application, provider normalization, atomic rollback, unauthenticated failure,
@@ -67,11 +68,18 @@ No paid provider turn is part of this verification. Authenticated tests use
 synthetic credentials only to construct and reconfigure local provider
 runtimes; they do not make network requests.
 
+## Live Jev activation
+
+The default remains the deterministic, offline `RuleBasedClassifier`. Live
+classification requires the exact process opt-in `MONA_ACP_LIVE_JEV=1` and a
+separately resolved `MONA_ACP_JEV_PROVIDER` route. Invalid activation values or
+unavailable configuration visibly fall back to the offline classifier without
+performing a request. The subscription path requires the distinct `acp_jev`
+capability; it does not reuse memory or browser entitlement.
+
 ## Deliberate follow-ons
 
 - Make the provider tier map operator-configurable while keeping the same
   provider/auth boundary.
-- Persist multi-turn conversation history and durable resume state.
-- Interrupt a running provider or shell process from `session/cancel`.
 - Run an explicitly approved paid provider smoke through Monitter when one is
   available.

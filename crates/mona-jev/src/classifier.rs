@@ -1,8 +1,8 @@
 //! Rule-based classifier — used by Phase 2 as the default classifier.
 //!
 //! This is intentionally simple: keyword heuristics over the prompt +
-//! last-outcome signal. Phase 2.5 adds a live HTTP classifier that calls
-//! a Jev endpoint; the rule-based one stays as the offline fallback and
+//! last-outcome signal. The ACP live adapter calls the shared typed Decisions
+//! transport; the rule-based classifier stays as the default offline path and
 //! as the test double for `crates/mona-acp/tests/end_to_end.rs`.
 //!
 //! Rules (in priority order):

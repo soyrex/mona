@@ -1,6 +1,6 @@
 //! Session lifecycle — `session/new`, `session/resume`, `session/cancel`,
-//! `session/list`. Real session state in Phase 2; full `session/prompt`
-//! driving `Agent::run_turn` lands in Phase 2.5.
+//! `session/list`. Durable bounded state is restored with current credentials;
+//! provider execution is owned by the reviewed ACP loop.
 
 use mona_jev::{JevMessage, JevRole, JevTurnOutcome};
 use serde::{Deserialize, Serialize};
@@ -285,8 +285,7 @@ impl SessionRegistry {
         Ok(true)
     }
 
-    /// Update the model + effort for an existing session. Phase 2.5 calls
-    /// this after the per-turn router decides on a new model.
+    /// Persist model + effort after a successful runtime update.
     pub fn update(&self, session: &Session) -> bool {
         let mut inner = self.inner.lock().unwrap();
         if inner.sessions.contains_key(&session.id) {

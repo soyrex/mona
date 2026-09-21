@@ -83,7 +83,7 @@ The 24 crates below are TUI/display/presentation-only. They are listed in `Cargo
 | `crates/mona-message-types` | `crate::protocol::HistoryMessage` |
 | `crates/mona-transport` | `crate::transport::{ReadHalf, WriteHalf}` |
 | `crates/mona-protocol` | `crate::protocol::{Request, ServerEvent}` |
-| `crates/mona-harness-api-server` | Will become Phase 2's ACP server (currently `acp.rs` reimplements the JSON-RPC loop; Phase 2 should reuse `harness-api-server`'s framing) |
+| `crates/mona-harness-api-server` | Used by the legacy CLI path. The dedicated Phase 2 `mona-acp` crate now owns its reviewed JSON-RPC lifecycle; any future consolidation must preserve its narrower permission and tool boundary. |
 
 ## `src/main.rs` — what can be removed
 

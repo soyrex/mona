@@ -46,7 +46,7 @@ smoke remains the live integration check.
 ## Deliberate follow-ons
 
 - Jev-selected model and effort application is complete in Milestone C.2.
-- Persist multi-turn conversation history and durable resume state.
-- Interrupt a running provider or shell process from `session/cancel`.
+- Durable bounded context/resume and in-flight provider cancellation are
+  complete in the Phase 2 closeout.
 - Add a live Monitter approval smoke with an authenticated provider when an
   explicit paid-turn approval is available.

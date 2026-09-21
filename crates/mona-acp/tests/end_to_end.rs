@@ -319,7 +319,7 @@ fn per_turn_router_fires_on_session_prompt() {
     let _ = std::fs::remove_dir_all(&tmp_home);
 }
 
-/// Phase 2.5: a sensitive prompt is refused with a permission_required
+/// A sensitive prompt is refused with a permission_required
 /// error rather than being routed.
 #[test]
 fn sensitive_prompt_short_circuits_to_permission_required() {

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 const PROVIDER_ENV: &str = "MONA_MEMORY_JEV_PROVIDER";
 const BROWSER_PROVIDER_ENV: &str = "MONA_BROWSER_JEV_PROVIDER";
+const ACP_PROVIDER_ENV: &str = "MONA_ACP_JEV_PROVIDER";
 const MAX_REQUEST_BYTES: usize = 80 * 1024;
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_ME_BYTES: usize = 16 * 1024;
@@ -20,6 +21,7 @@ const MAX_QUESTIONS: usize = 24;
 enum JevPurpose {
     Memory,
     Browser,
+    Acp,
 }
 
 impl JevPurpose {
@@ -27,6 +29,7 @@ impl JevPurpose {
         match self {
             Self::Memory => "memory",
             Self::Browser => "browser",
+            Self::Acp => "ACP routing",
         }
     }
 
@@ -34,6 +37,7 @@ impl JevPurpose {
         match self {
             Self::Memory => "memory_jev",
             Self::Browser => "browser_jev",
+            Self::Acp => "acp_jev",
         }
     }
 
@@ -45,12 +49,16 @@ impl JevPurpose {
         let key = match self {
             Self::Memory => PROVIDER_ENV,
             Self::Browser => BROWSER_PROVIDER_ENV,
+            Self::Acp => ACP_PROVIDER_ENV,
         };
         match env(key) {
             Ok(value) => Ok(value),
             Err(std::env::VarError::NotPresent) => Ok(match self {
                 Self::Memory => memory_default(),
                 Self::Browser => "auto".into(),
+                // ACP routing is deliberately separate from memory and browser
+                // selection. It still uses the same configured credential routes.
+                Self::Acp => "auto".into(),
             }),
             Err(_) => bail!("{key} must contain a valid provider name"),
         }
@@ -131,6 +139,13 @@ impl JevClient {
     /// subscription-first auto selection. Evaluation never changes accounts.
     pub fn for_browser() -> Result<Self> {
         Self::for_purpose(JevPurpose::Browser)
+    }
+
+    /// ACP routing is independent of memory and browser configuration. The
+    /// caller must still make its own explicit activation decision; this only
+    /// resolves an existing credential route and never performs I/O.
+    pub fn for_acp() -> Result<Self> {
+        Self::for_purpose(JevPurpose::Acp)
     }
 
     fn for_purpose(purpose: JevPurpose) -> Result<Self> {
@@ -228,6 +243,7 @@ impl JevClient {
                 match self.purpose {
                     JevPurpose::Memory => "Jcode Memory",
                     JevPurpose::Browser => "Jcode Browser",
+                    JevPurpose::Acp => "Mona ACP Routing",
                 },
             );
         }
@@ -486,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn purpose_selectors_are_independent_and_browser_defaults_to_subscription_first() {
+    fn purpose_selectors_are_independent_and_non_memory_purposes_default_to_auto() {
         let env = |key: &str| match key {
             PROVIDER_ENV => Ok("typesafe".into()),
             BROWSER_PROVIDER_ENV => Ok("openrouter".into()),
@@ -510,6 +526,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(selector, "auto");
+        let selector = JevPurpose::Acp
+            .selector_with(
+                |key| {
+                    assert_eq!(key, ACP_PROVIDER_ENV);
+                    Err(std::env::VarError::NotPresent)
+                },
+                || panic!("ACP must not consult memory config"),
+            )
+            .unwrap();
+        assert_eq!(selector, "auto");
         assert_eq!(
             resolve_with(&selector, |_, _| Some("present".into()))
                 .unwrap()
@@ -528,7 +554,7 @@ mod tests {
                 .unwrap(),
             "aimlapi"
         );
-        for purpose in [JevPurpose::Memory, JevPurpose::Browser] {
+        for purpose in [JevPurpose::Memory, JevPurpose::Browser, JevPurpose::Acp] {
             assert!(
                 purpose
                     .selector_with(
@@ -911,6 +937,52 @@ mod tests {
             serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(body["questions"], Value::Object(browser_questions()));
         assert!(body["state"].is_string());
+    }
+
+    #[tokio::test]
+    async fn acp_subscription_checks_distinct_capability_before_posting_state() {
+        let (base, worker) = mock_server(vec![
+            (
+                200,
+                json!({"capabilities": {"acp_jev": true, "memory_jev": false, "browser_jev": false}}).to_string(),
+                vec![],
+            ),
+            (200, response().to_string(), vec![]),
+        ]);
+        let mut client = mock_client(&base, JevProvider::Jcode);
+        client.purpose = JevPurpose::Acp;
+        assert_eq!(
+            client
+                .evaluate(json!({"prompt": "private-acp-state"}), questions())
+                .await
+                .unwrap(),
+            response()
+        );
+        let requests = worker.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /v1/me "));
+        assert!(!requests[0].contains("private-acp-state"));
+        assert!(requests[1].starts_with("POST /v1/decisions "));
+        assert!(requests[1].contains("private-acp-state"));
+    }
+
+    #[tokio::test]
+    async fn acp_capability_denial_prevents_state_upload() {
+        let (base, worker) = mock_server(vec![(
+            200,
+            json!({"capabilities": {"memory_jev": true, "browser_jev": true}}).to_string(),
+            vec![],
+        )]);
+        let mut client = mock_client(&base, JevProvider::Jcode);
+        client.purpose = JevPurpose::Acp;
+        let error = client
+            .evaluate(json!("private-acp-state"), questions())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("acp_jev"));
+        let requests = worker.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].contains("private-acp-state"));
     }
 
     #[tokio::test]

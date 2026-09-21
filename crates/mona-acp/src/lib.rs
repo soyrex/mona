@@ -17,6 +17,7 @@
 
 pub mod auth;
 pub mod initialize;
+pub mod live_jev;
 pub mod policy;
 pub mod provider;
 pub mod provider_whitelist;
@@ -27,9 +28,10 @@ pub mod turn;
 
 pub use auth::{Auth, AuthRegistry};
 pub use initialize::initialize_result;
+pub use live_jev::{ClassifierStartup, LiveJevActivation, classifier_from_environment};
 pub use policy::JevRoutePolicy;
 pub use provider::{ProviderHandle, build_provider_for_session};
 pub use provider_whitelist::{SupportedProvider, parse_provider};
-pub use server::{run_acp_server, ServerState};
+pub use server::{ServerState, run_acp_server};
 pub use trace::{RouterTrace, TraceTrigger};
 pub use turn::{RouterConfig, TurnRoutingDecision, run_turn_with_jev};
