@@ -37,6 +37,7 @@ use crate::provider_whitelist::SupportedProvider;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Auth state for one provider. `None` means "not configured".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +104,36 @@ impl Auth {
             }
         }
     }
+
+    /// OAuth credentials are treated as unavailable after their explicit
+    /// expiry. API keys do not expire locally.  We intentionally do not make
+    /// a network refresh here: ACP status and reload must never turn a
+    /// harmless inspection into an outbound credential operation.
+    pub fn is_expired(&self) -> bool {
+        let expires_at_ms = match self {
+            Self::OpenaiOauth { expires_at_ms, .. }
+            | Self::AnthropicOauth { expires_at_ms, .. } => *expires_at_ms,
+            Self::OpenaiApiKey { .. }
+            | Self::AnthropicApiKey { .. }
+            | Self::MinimaxApiKey { .. } => return false,
+        };
+        expires_at_ms > 0 && expires_at_ms <= now_ms()
+    }
+
+    pub fn status(&self) -> &'static str {
+        if self.is_expired() {
+            "expired"
+        } else {
+            "configured"
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(i64::MAX)
 }
 
 fn mask_token(token: &str) -> String {
@@ -126,10 +157,14 @@ impl AuthRegistry {
     /// or env-var fallback. Logs a warning for each provider that is not
     /// configured; the loader is permissive — missing auth is not an error.
     pub fn load(home_dir: &Path) -> Self {
+        Self::load_inner(home_dir, true)
+    }
+
+    fn load_inner(home_dir: &Path, allow_env: bool) -> Self {
         let mut inner = std::collections::HashMap::new();
 
         for provider in SupportedProvider::all() {
-            match Self::load_one(home_dir, *provider) {
+            match Self::load_one(home_dir, *provider, allow_env) {
                 Ok(Some(auth)) => {
                     tracing::info!(
                         provider = %provider.as_str(),
@@ -157,7 +192,16 @@ impl AuthRegistry {
         Self { inner }
     }
 
-    fn load_one(home_dir: &Path, provider: SupportedProvider) -> Result<Option<Auth>> {
+    #[cfg(test)]
+    fn load_files_only(home_dir: &Path) -> Self {
+        Self::load_inner(home_dir, false)
+    }
+
+    fn load_one(
+        home_dir: &Path,
+        provider: SupportedProvider,
+        allow_env: bool,
+    ) -> Result<Option<Auth>> {
         // Try the home-dir file first.
         let path = auth_path(home_dir, provider);
         if path.exists() {
@@ -177,6 +221,9 @@ impl AuthRegistry {
         }
 
         // Fall back to env vars.
+        if !allow_env {
+            return Ok(None);
+        }
         let env_var = match provider {
             SupportedProvider::Codex => "OPENAI_API_KEY",
             SupportedProvider::Claude => "ANTHROPIC_API_KEY",
@@ -199,17 +246,29 @@ impl AuthRegistry {
 
     /// Returns `true` if the provider has configured auth.
     pub fn has_auth(&self, provider: SupportedProvider) -> bool {
-        self.inner.contains_key(&provider)
+        self.inner
+            .get(&provider)
+            .is_some_and(|auth| !auth.is_expired())
     }
 
     /// Get the auth record for a provider.
     pub fn get(&self, provider: SupportedProvider) -> Option<&Auth> {
+        self.inner.get(&provider).filter(|auth| !auth.is_expired())
+    }
+
+    /// Return configured credentials even when expired, for status reporting
+    /// only. Callers must never use this to construct a provider runtime.
+    pub fn get_status(&self, provider: SupportedProvider) -> Option<&Auth> {
         self.inner.get(&provider)
     }
 
     /// List providers that have configured auth.
     pub fn configured_providers(&self) -> Vec<SupportedProvider> {
-        let mut v: Vec<_> = self.inner.keys().copied().collect();
+        let mut v: Vec<_> = self
+            .inner
+            .iter()
+            .filter_map(|(provider, auth)| (!auth.is_expired()).then_some(*provider))
+            .collect();
         v.sort_by_key(|p| p.as_str());
         v
     }
@@ -240,11 +299,17 @@ mod tests {
     #[test]
     fn auth_provider_matches_variant() {
         assert_eq!(
-            Auth::OpenaiApiKey { api_key: "k".into() }.provider(),
+            Auth::OpenaiApiKey {
+                api_key: "k".into()
+            }
+            .provider(),
             SupportedProvider::Codex
         );
         assert_eq!(
-            Auth::AnthropicApiKey { api_key: "k".into() }.provider(),
+            Auth::AnthropicApiKey {
+                api_key: "k".into()
+            }
+            .provider(),
             SupportedProvider::Claude
         );
         assert_eq!(
@@ -261,7 +326,7 @@ mod tests {
     fn load_returns_empty_registry_when_no_files_or_env() {
         let tmp = std::env::temp_dir().join(format!("mona-auth-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let registry = AuthRegistry::load(&tmp);
+        let registry = AuthRegistry::load_files_only(&tmp);
         assert!(registry.configured_providers().is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -275,7 +340,7 @@ mod tests {
             r#"{"kind":"openai_api_key","api_key":"sk-test-1234"}"#,
         )
         .unwrap();
-        let registry = AuthRegistry::load(&tmp);
+        let registry = AuthRegistry::load_files_only(&tmp);
         assert!(registry.has_auth(SupportedProvider::Codex));
         assert!(!registry.has_auth(SupportedProvider::Claude));
         assert_eq!(
@@ -304,8 +369,17 @@ mod tests {
     #[test]
     fn auth_path_matches_provider_name() {
         let tmp = std::path::PathBuf::from("/tmp");
-        assert_eq!(auth_path(&tmp, SupportedProvider::Codex), PathBuf::from("/tmp/codex.json"));
-        assert_eq!(auth_path(&tmp, SupportedProvider::Claude), PathBuf::from("/tmp/claude.json"));
-        assert_eq!(auth_path(&tmp, SupportedProvider::Minimax), PathBuf::from("/tmp/minimax.json"));
+        assert_eq!(
+            auth_path(&tmp, SupportedProvider::Codex),
+            PathBuf::from("/tmp/codex.json")
+        );
+        assert_eq!(
+            auth_path(&tmp, SupportedProvider::Claude),
+            PathBuf::from("/tmp/claude.json")
+        );
+        assert_eq!(
+            auth_path(&tmp, SupportedProvider::Minimax),
+            PathBuf::from("/tmp/minimax.json")
+        );
     }
 }

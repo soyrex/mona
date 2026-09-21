@@ -17,6 +17,7 @@
 //! `mona-acp` without code changes.
 
 use crate::auth::AuthRegistry;
+use crate::policy::JevRoutePolicy;
 use serde_json::{Value, json};
 
 /// ACP protocol version this server speaks. Matches upstream's
@@ -24,7 +25,12 @@ use serde_json::{Value, json};
 pub const ACP_PROTOCOL_VERSION: u64 = 1;
 
 /// Build the JSON-RPC `result` payload for an `initialize` request.
-pub fn initialize_result(server_name: &str, server_version: &str, auth: &AuthRegistry) -> Value {
+pub fn initialize_result(
+    server_name: &str,
+    server_version: &str,
+    auth: &AuthRegistry,
+    policy: JevRoutePolicy,
+) -> Value {
     let configured: Vec<String> = auth
         .configured_providers()
         .into_iter()
@@ -40,7 +46,12 @@ pub fn initialize_result(server_name: &str, server_version: &str, auth: &AuthReg
             },
             "extensions": {
                 "monitter": {
-                    "jev_routing": true,
+                    // The route endpoint is always available, but only
+                    // advertised as active when the selected policy actually
+                    // classifies. This avoids claiming a disabled feature is
+                    // operating.
+                    "jev_routing": policy != JevRoutePolicy::Off,
+                    "jev_route_control": true,
                     "reasoning_effort": true,
                     "auth_loader": true
                 }
@@ -64,6 +75,7 @@ pub fn initialize_result(server_name: &str, server_version: &str, auth: &AuthReg
             }
         ],
         "configuredProviders": configured,
+        "jevRoutePolicy": policy.as_str(),
         "agentInfo": {
             "name": server_name,
             "version": server_version,
@@ -76,12 +88,13 @@ pub fn initialize_result(server_name: &str, server_version: &str, auth: &AuthReg
 mod tests {
     use super::*;
     use crate::auth::AuthRegistry;
+    use crate::policy::JevRoutePolicy;
     use crate::provider_whitelist::SupportedProvider;
 
     #[test]
     fn result_advertises_phase3_capabilities() {
         let registry = AuthRegistry::default();
-        let r = initialize_result("mona-acp", "0.1.0", &registry);
+        let r = initialize_result("mona-acp", "0.1.0", &registry, JevRoutePolicy::SafeAuto);
         assert_eq!(r["protocolVersion"], 1);
         assert_eq!(
             r["agentCapabilities"]["extensions"]["monitter"]["jev_routing"],
@@ -101,12 +114,9 @@ mod tests {
     #[test]
     fn result_lists_three_supported_providers() {
         let registry = AuthRegistry::default();
-        let r = initialize_result("mona-acp", "0.1.0", &registry);
+        let r = initialize_result("mona-acp", "0.1.0", &registry, JevRoutePolicy::SafeAuto);
         let methods = r["authMethods"].as_array().unwrap();
-        let ids: Vec<&str> = methods
-            .iter()
-            .map(|m| m["id"].as_str().unwrap())
-            .collect();
+        let ids: Vec<&str> = methods.iter().map(|m| m["id"].as_str().unwrap()).collect();
         assert_eq!(ids, vec!["codex", "claude", "minimax"]);
     }
 
@@ -115,9 +125,11 @@ mod tests {
         let mut registry = AuthRegistry::default();
         registry.inner_mut().insert(
             SupportedProvider::Codex,
-            crate::auth::Auth::OpenaiApiKey { api_key: "sk-test".into() },
+            crate::auth::Auth::OpenaiApiKey {
+                api_key: "sk-test".into(),
+            },
         );
-        let r = initialize_result("mona-acp", "0.1.0", &registry);
+        let r = initialize_result("mona-acp", "0.1.0", &registry, JevRoutePolicy::SafeAuto);
         let configured: Vec<String> = r["configuredProviders"]
             .as_array()
             .unwrap()
@@ -125,5 +137,24 @@ mod tests {
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
         assert_eq!(configured, vec!["codex"]);
+    }
+
+    #[test]
+    fn disabled_policy_does_not_advertise_active_routing() {
+        let result = initialize_result(
+            "mona-acp",
+            "0.1.0",
+            &AuthRegistry::default(),
+            JevRoutePolicy::Off,
+        );
+        assert_eq!(result["jevRoutePolicy"], "off");
+        assert_eq!(
+            result["agentCapabilities"]["extensions"]["monitter"]["jev_routing"],
+            false
+        );
+        assert_eq!(
+            result["agentCapabilities"]["extensions"]["monitter"]["jev_route_control"],
+            true
+        );
     }
 }

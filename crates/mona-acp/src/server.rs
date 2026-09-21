@@ -17,21 +17,24 @@ use crate::auth::AuthRegistry;
 use crate::initialize::initialize_result;
 use crate::policy::JevRoutePolicy;
 use crate::session::{SessionInfo, SessionRegistry};
+use crate::trace::{RouterTrace, TraceTrigger};
 use crate::turn::{
-    RouterConfig, decision_to_router_trace_value, finalize_routing_decision, run_turn_with_jev,
+    RouterConfig, decision_to_router_trace_value, finalize_routing_decision,
+    run_turn_with_jev_context, skipped_routing_decision,
 };
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use mona_jev::JevClassifier;
+use mona_jev::{JevClassifier, JevRole, JevTurnOutcome};
 use mona_message_types::{ContentBlock, Message, Role, StreamEvent, ToolCall};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, oneshot};
 use tokio::time::{Duration, timeout};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Shared stdout writer for the ACP server. Handlers that stream updates
@@ -54,10 +57,13 @@ pub struct ServerState {
     pub sessions: SessionRegistry,
     pub policy: Arc<Mutex<JevRoutePolicy>>,
     pub last_classification: Arc<Mutex<Option<mona_jev::JevRoutePlan>>>,
+    classifier_cache: Arc<Mutex<HashMap<String, mona_jev::JevRoutePlan>>>,
     pub classifier: Arc<dyn JevClassifier>,
     pub router_config: Arc<RouterConfig>,
     pub home_dir: PathBuf,
-    pub auth: AuthRegistry,
+    /// Reloadable local credential registry. Reads only expose status-safe
+    /// summaries; expired OAuth records never become usable provider auth.
+    pub auth: Arc<RwLock<AuthRegistry>>,
     /// Per-session turn counter + swaps counter, kept here because the
     /// session registry is per-session and we'd otherwise lose the counts.
     session_counters: Arc<Mutex<SessionCounters>>,
@@ -70,6 +76,10 @@ pub struct ServerState {
     /// prompt task waits on the matching oneshot sender.
     pending_client_responses: PendingClientResponses,
     client_closed: Arc<AtomicBool>,
+    /// A real cancellation token is registered before a prompt begins. The
+    /// stdio reader can therefore service `session/cancel` concurrently with
+    /// a streaming provider turn.
+    inflight_turns: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 #[derive(Default, Clone)]
@@ -95,18 +105,31 @@ impl SessionCounters {
 impl ServerState {
     pub fn new(home_dir: PathBuf, classifier: Arc<dyn JevClassifier>) -> Self {
         let auth = AuthRegistry::load(&home_dir);
+        let policy = load_route_policy(&home_dir);
+        let sessions = match SessionRegistry::with_state_dir(home_dir.join("sessions")) {
+            Ok(registry) => registry,
+            Err(error) => {
+                // Durable state failure must not destroy or overwrite the
+                // existing file. Stay available with an empty in-memory
+                // registry and make the operator-visible log explicit.
+                warn!(%error, "failed to load durable session state; using empty in-memory registry");
+                SessionRegistry::default()
+            }
+        };
         Self {
-            sessions: SessionRegistry::default(),
-            policy: Arc::new(Mutex::new(JevRoutePolicy::SafeAuto)),
+            sessions,
+            policy: Arc::new(Mutex::new(policy)),
             last_classification: Arc::new(Mutex::new(None)),
+            classifier_cache: Arc::new(Mutex::new(HashMap::new())),
             classifier,
             router_config: Arc::new(RouterConfig::default()),
             home_dir,
-            auth,
+            auth: Arc::new(RwLock::new(auth)),
             session_counters: Arc::new(Mutex::new(SessionCounters::default())),
             tools: Arc::new(mona_acp_tools::default_registry()),
             pending_client_responses: Arc::new(Mutex::new(HashMap::new())),
             client_closed: Arc::new(AtomicBool::new(false)),
+            inflight_turns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -123,18 +146,7 @@ pub async fn run_acp_server(state: ServerState) -> Result<()> {
     let mut reader = BufReader::new(stdin);
     let writer: SharedWriter = Arc::new(Mutex::new(BufWriter::new(Box::new(stdout))));
     let mut buf = String::new();
-    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<String>();
-    let worker_state = state.clone();
-    let worker_writer = writer.clone();
-    let request_worker = tokio::spawn(async move {
-        while let Some(line) = request_rx.recv().await {
-            let response = handle_frame(&line, &worker_state, worker_writer.clone()).await;
-            if let Err(error) = write_json_frame(&worker_writer, &response).await {
-                error!(%error, "failed to write ACP response");
-                break;
-            }
-        }
-    });
+    let mut request_tasks = tokio::task::JoinSet::new();
 
     info!("mona-acp listening on stdio");
     loop {
@@ -145,13 +157,17 @@ pub async fn run_acp_server(state: ServerState) -> Result<()> {
             .context("read from stdin")?;
         if n == 0 {
             info!("stdin closed; shutting down mona-acp");
-            drop(request_tx);
             // Dropping outstanding response senders rejects permission waits
             // promptly instead of leaving the ordered worker blocked.
             state.client_closed.store(true, Ordering::Release);
             state.pending_client_responses.lock().await.clear();
-            if let Err(error) = request_worker.await {
-                warn!(%error, "ACP request worker stopped unexpectedly");
+            for token in state.inflight_turns.lock().await.values() {
+                token.cancel();
+            }
+            while let Some(result) = request_tasks.join_next().await {
+                if let Err(error) = result {
+                    warn!(%error, "ACP request task stopped unexpectedly");
+                }
             }
             return Ok(());
         }
@@ -170,9 +186,15 @@ pub async fn run_acp_server(state: ServerState) -> Result<()> {
             continue;
         }
 
-        if request_tx.send(line.to_string()).is_err() {
-            anyhow::bail!("ACP request worker is unavailable");
-        }
+        let request_state = state.clone();
+        let request_writer = writer.clone();
+        let line = line.to_string();
+        request_tasks.spawn(async move {
+            let response = handle_frame(&line, &request_state, request_writer.clone()).await;
+            if let Err(error) = write_json_frame(&request_writer, &response).await {
+                error!(%error, "failed to write ACP response");
+            }
+        });
     }
 }
 
@@ -217,15 +239,18 @@ pub async fn handle_frame(line: &str, state: &ServerState, writer: SharedWriter)
 
     debug!(method = %method, "dispatching ACP frame");
     match method.as_str() {
-        "initialize" => handle_initialize(id, &params, state),
+        "initialize" => handle_initialize(id, &params, state).await,
         "session/new" => handle_session_new(id, &params, state).await,
         "session/list" => handle_session_list(id, state),
         "session/resume" => handle_session_resume(id, &params, state),
-        "session/cancel" => handle_session_cancel(id, &params, state),
+        "session/cancel" => handle_session_cancel(id, &params, state).await,
         "session/auth" => handle_session_auth(id, &params, state),
+        "session/jev_route" => handle_session_jev_route(id, &params, state).await,
         "session/prompt" => handle_session_prompt(id, &params, state, writer).await,
-        "session/set_model" => handle_session_set_model(id, &params, state),
-        "session/set_reasoning_effort" => handle_session_set_reasoning_effort(id, &params, state),
+        "session/set_model" => handle_session_set_model(id, &params, state).await,
+        "session/set_reasoning_effort" => {
+            handle_session_set_reasoning_effort(id, &params, state).await
+        }
         other => jsonrpc_error(
             id,
             -32601,
@@ -234,10 +259,12 @@ pub async fn handle_frame(line: &str, state: &ServerState, writer: SharedWriter)
     }
 }
 
-fn handle_initialize(id: Value, _params: &Value, state: &ServerState) -> Value {
+async fn handle_initialize(id: Value, _params: &Value, state: &ServerState) -> Value {
+    let policy = state.policy.lock().await;
+    let auth = state.auth.read().expect("auth registry lock poisoned");
     jsonrpc_result(
         id,
-        initialize_result(SERVER_NAME, SERVER_VERSION, &state.auth),
+        initialize_result(SERVER_NAME, SERVER_VERSION, &auth, *policy),
     )
 }
 
@@ -253,17 +280,18 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    let provider =
-        match crate::provider_whitelist::parse_provider_with_default(provider_str, &state.auth) {
-            Ok(p) => p,
-            Err(e) => return jsonrpc_error(id, -32602, &format!("{e}")),
-        };
+    let auth = state.auth.read().expect("auth registry lock poisoned");
+    let provider = match crate::provider_whitelist::parse_provider_with_default(provider_str, &auth)
+    {
+        Ok(p) => p,
+        Err(e) => return jsonrpc_error(id, -32602, &format!("{e}")),
+    };
     // Reuse the provider_str for the existing SessionRegistry call. The
     // registry also calls parse_provider; if it errors with "auto", we
     // catch that above and never reach here.
     match state
         .sessions
-        .new_session(provider.as_str(), model, effort, working_dir, &state.auth)
+        .new_session(provider.as_str(), model, effort, working_dir, &auth)
     {
         Ok(session) => {
             info!(session_id = %session.id, provider = %session.provider.as_str(),
@@ -310,8 +338,9 @@ fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -> Valu
         Some(s) => s,
         None => return jsonrpc_error(id, -32602, "missing sessionId"),
     };
-    match state.sessions.get(session_id) {
-        Some(s) => {
+    let auth = state.auth.read().expect("auth registry lock poisoned");
+    match state.sessions.resume(session_id, &auth) {
+        Ok(s) => {
             let info: SessionInfo = (&s).into();
             jsonrpc_result(
                 id,
@@ -324,18 +353,40 @@ fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -> Valu
                 }),
             )
         }
-        None => jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
+        Err(crate::session::SessionError::NotFound(_)) => {
+            jsonrpc_error(id, -32004, &format!("session `{session_id}` not found"))
+        }
+        Err(crate::session::SessionError::MissingAuth(_)) => jsonrpc_error(
+            id,
+            -32002,
+            "cannot resume session without current, non-expired provider authentication",
+        ),
+        Err(error) => jsonrpc_error(id, -32603, &format!("could not resume session: {error}")),
     }
 }
 
-fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -> Value {
+async fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -> Value {
     let session_id = match params.get("sessionId").and_then(Value::as_str) {
         Some(s) => s,
         None => return jsonrpc_error(id, -32602, "missing sessionId"),
     };
+    let was_inflight = state
+        .inflight_turns
+        .lock()
+        .await
+        .remove(session_id)
+        .map(|token| {
+            token.cancel();
+            true
+        })
+        .unwrap_or(false);
     if state.sessions.cancel(session_id) {
+        state.session_counters.lock().await.remove(session_id);
         info!(session_id, "session cancelled");
-        jsonrpc_result(id, json!({ "cancelled": true }))
+        jsonrpc_result(
+            id,
+            json!({ "cancelled": true, "interrupted": was_inflight }),
+        )
     } else {
         warn!(session_id, "session/cancel for unknown session");
         jsonrpc_result(id, json!({ "cancelled": false }))
@@ -357,11 +408,19 @@ fn handle_session_auth(id: Value, params: &Value, state: &ServerState) -> Value 
         None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
     };
 
-    match state.auth.get(session.provider) {
+    if params.get("reload").and_then(Value::as_bool) == Some(true) {
+        let replacement = AuthRegistry::load(&state.home_dir);
+        *state.auth.write().expect("auth registry lock poisoned") = replacement;
+    }
+    let auth = state.auth.read().expect("auth registry lock poisoned");
+    match auth.get_status(session.provider) {
         Some(auth) => jsonrpc_result(
             id,
             json!({
                 "configured": true,
+                "usable": !auth.is_expired(),
+                "status": auth.status(),
+                "refreshSupported": false,
                 "summary": auth.masked_summary(),
                 "provider": session.provider.as_str(),
                 "phase": "3"
@@ -371,6 +430,9 @@ fn handle_session_auth(id: Value, params: &Value, state: &ServerState) -> Value 
             id,
             json!({
                 "configured": false,
+                "usable": false,
+                "status": "missing",
+                "refreshSupported": false,
                 "summary": null,
                 "provider": session.provider.as_str(),
                 "phase": "3",
@@ -383,6 +445,75 @@ fn handle_session_auth(id: Value, params: &Value, state: &ServerState) -> Value 
     }
 }
 
+/// Read or change the process-local Jev route policy. The setter is explicit
+/// and validates its closed enum; it never changes tool permissions or any
+/// provider credentials. A route-policy change is observable immediately on
+/// the next prompt and is included in initialize thereafter.
+async fn handle_session_jev_route(id: Value, params: &Value, state: &ServerState) -> Value {
+    if let Some(requested) = params.get("policy").and_then(Value::as_str) {
+        let Some(policy) = JevRoutePolicy::parse(requested) else {
+            return jsonrpc_error(
+                id,
+                -32602,
+                "invalid Jev route policy; use off, recommend, safe_auto, or per_turn",
+            );
+        };
+        *state.policy.lock().await = policy;
+    }
+    let policy = *state.policy.lock().await;
+    jsonrpc_result(
+        id,
+        json!({
+            "policy": policy.as_str(),
+            "classifies": policy != JevRoutePolicy::Off,
+            "applies": policy.applies_plan(),
+            "permissionWidening": false,
+        }),
+    )
+}
+
+/// Load the policy from a narrow, local-only source. An invalid file or env
+/// value is a safe failure: keep `safe_auto` and never silently enable a more
+/// permissive mode. Environment is intentionally an override for supervised
+/// deployments; the config file is only a small JSON object and ignored when
+/// malformed.
+fn load_route_policy(home_dir: &std::path::Path) -> JevRoutePolicy {
+    let from_env = std::env::var("MONA_ACP_JEV_ROUTE_POLICY")
+        .ok()
+        .or_else(|| std::env::var("MONA_JEV_ROUTE_POLICY").ok());
+    if let Some(value) = from_env {
+        if let Some(policy) = JevRoutePolicy::parse(&value) {
+            return policy;
+        }
+        warn!(
+            value,
+            "invalid Jev route policy environment value; using safe_auto"
+        );
+        return JevRoutePolicy::SafeAuto;
+    }
+
+    let path = home_dir.join("mona-acp.json");
+    let parsed = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| {
+            value
+                .get("jevRoutePolicy")
+                .or_else(|| value.get("jev_route_policy"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+    match parsed.as_deref().and_then(JevRoutePolicy::parse) {
+        Some(policy) => policy,
+        None => {
+            if path.exists() && parsed.is_some() {
+                warn!(path = %path.display(), "invalid Jev route policy config; using safe_auto");
+            }
+            JevRoutePolicy::SafeAuto
+        }
+    }
+}
+
 /// Per-turn routing hook + agent-loop driver.
 ///
 /// Milestones B and C.1 drive a real model turn through the session's
@@ -391,13 +522,15 @@ fn handle_session_auth(id: Value, params: &Value, state: &ServerState) -> Value 
 /// text plus token usage.
 ///
 /// Scope:
-/// - One user message per `session/prompt` call; no conversation history is
-///   kept inside mona-acp yet.
+/// - Routing receives the bounded durable session context; provider requests
+///   still begin with the current user message until provider-native resume is
+///   introduced.
 /// - Tool calls are bounded to eight provider rounds. `bash` and `write_file`
 ///   require a one-time ACP permission response; scoped read tools do not.
-/// - `session/cancel` mid-stream is not yet wired; the turn runs to
-///   completion or transport error.
-/// - OAuth refresh during a turn surfaces as `unauthenticated`.
+/// - `session/cancel` drops the in-flight provider stream and rejects any
+///   pending permission wait.
+/// - OAuth refresh is never performed implicitly; reload only reads local
+///   credential sources and expired credentials surface as unauthenticated.
 ///
 /// Per-turn Jev routing applies its provider-scoped model and effort to an
 /// isolated provider candidate. Only a fully successful candidate replaces
@@ -423,6 +556,16 @@ async fn handle_session_prompt(
         Some(s) => s,
         None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
     };
+    let cancellation = CancellationToken::new();
+    let mut inflight = state.inflight_turns.lock().await;
+    if inflight.contains_key(&session_id) {
+        return jsonrpc_error(id, -32000, "a prompt is already active for this session");
+    }
+    inflight.insert(session_id.clone(), cancellation.clone());
+    drop(inflight);
+    if cancellation.is_cancelled() {
+        return jsonrpc_error(id, -32800, "session prompt cancelled");
+    }
 
     // 1. Run the per-turn router. Sensitive prompts short-circuit to
     //    permission_required before we touch the provider.
@@ -435,32 +578,79 @@ async fn handle_session_prompt(
         let mut counters = state.session_counters.lock().await;
         counters.get_or_insert(&session_id).0 += 1;
     }
-    let mut decision = match run_turn_with_jev(
-        state.classifier.clone(),
-        &session,
-        &text,
-        turn_count_for_routing,
-        swaps_in_session,
-        None, // last_turn_outcome — populated once we have a real Agent loop
-        &state.router_config,
-        &state.home_dir,
-    )
-    .await
-    {
-        Ok(d) => d,
-        Err(e) => {
-            error!(error = %e, session_id, "router hook errored");
-            return jsonrpc_error(id, -32603, &format!("router hook error: {e}"));
+    let context = state
+        .sessions
+        .routing_context(&session_id)
+        .unwrap_or_default();
+    let policy = *state.policy.lock().await;
+    let mut decision = if policy == JevRoutePolicy::Off {
+        skipped_routing_decision(&session, &text, "Jev routing policy is off")
+    } else {
+        let cached = state
+            .classifier_cache
+            .lock()
+            .await
+            .get(&session_id)
+            .cloned();
+        match run_turn_with_jev_context(
+            state.classifier.clone(),
+            &session,
+            &text,
+            turn_count_for_routing,
+            swaps_in_session,
+            context.recent_messages,
+            context.last_turn_outcome,
+            cached,
+            policy == JevRoutePolicy::SafeAuto,
+            &state.router_config,
+            &state.home_dir,
+        )
+        .await
+        {
+            Ok(mut decision) => {
+                let cacheable_plan = decision.applied_plan.clone();
+                if policy == JevRoutePolicy::Recommend {
+                    decision.applied_plan = None;
+                    decision.reason = format!("{}; recommendation only", decision.reason);
+                    decision.trace.rationale = decision.reason.clone();
+                }
+                if let Some(plan) = cacheable_plan {
+                    state
+                        .classifier_cache
+                        .lock()
+                        .await
+                        .insert(session_id.clone(), plan);
+                }
+                decision
+            }
+            Err(e) => {
+                error!(error = %e, session_id, "router hook errored");
+                state.inflight_turns.lock().await.remove(&session_id);
+                return jsonrpc_error(id, -32603, &format!("router hook error: {e}"));
+            }
         }
     };
     *state.last_classification.lock().await = decision.applied_plan.clone();
+    // Store the new input only after routing, so `recent_messages` is the
+    // bounded context *before* this prompt rather than a duplicate of it.
+    let _ = state
+        .sessions
+        .record_message(&session_id, JevRole::User, &text);
 
     if decision.sensitive {
         if let Err(error) =
             finalize_routing_decision(&mut decision, &session, false, None, &state.home_dir).await
         {
+            state.inflight_turns.lock().await.remove(&session_id);
             return jsonrpc_error(id, -32603, &format!("persist router trace: {error}"));
         }
+        let _ = state.sessions.set_last_turn_outcome(
+            &session_id,
+            Some(JevTurnOutcome::Uncertain {
+                reason: "sensitive prompt requires human review".to_string(),
+            }),
+        );
+        state.inflight_turns.lock().await.remove(&session_id);
         return jsonrpc_error(
             id,
             -32001, // permission_required
@@ -475,10 +665,15 @@ async fn handle_session_prompt(
     let pre_route_session = session.clone();
     let mut route_error = None;
     if route_requested {
-        let authenticated = session
-            .handle
-            .as_ref()
-            .is_some_and(|handle| handle.auth.is_some());
+        let authenticated = state
+            .auth
+            .read()
+            .expect("auth registry lock poisoned")
+            .has_auth(session.provider)
+            && session
+                .handle
+                .as_ref()
+                .is_some_and(|handle| handle.auth.is_some());
         if !authenticated {
             route_error = Some("provider is not authenticated".to_string());
         } else if let (Some(model), Some(effort)) = (
@@ -517,6 +712,7 @@ async fn handle_session_prompt(
     )
     .await
     {
+        state.inflight_turns.lock().await.remove(&session_id);
         return jsonrpc_error(id, -32603, &format!("persist router trace: {error}"));
     }
     let routing = decision_to_router_trace_value(&decision);
@@ -536,9 +732,21 @@ async fn handle_session_prompt(
     //    provider. We surface that as `unauthenticated` (-32002) here so
     //    the client can call `session/auth` and retry instead of getting
     //    a generic internal_error.
+    let provider_usable = state
+        .auth
+        .read()
+        .expect("auth registry lock poisoned")
+        .has_auth(session.provider);
     let handle = match session.handle.as_ref() {
-        Some(h) if h.auth.is_some() => h.clone(),
+        Some(h) if h.auth.is_some() && provider_usable => h.clone(),
         _ => {
+            let _ = state.sessions.set_last_turn_outcome(
+                &session_id,
+                Some(JevTurnOutcome::Failed {
+                    reason: "provider is not authenticated".to_string(),
+                }),
+            );
+            state.inflight_turns.lock().await.remove(&session_id);
             return jsonrpc_error(
                 id,
                 -32002, // unauthenticated
@@ -565,6 +773,13 @@ async fn handle_session_prompt(
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
     if !cwd.is_dir() {
+        let _ = state.sessions.set_last_turn_outcome(
+            &session_id,
+            Some(JevTurnOutcome::Failed {
+                reason: "session working directory does not exist".to_string(),
+            }),
+        );
+        state.inflight_turns.lock().await.remove(&session_id);
         return jsonrpc_error(
             id,
             -32602,
@@ -579,12 +794,13 @@ async fn handle_session_prompt(
         writer.clone(),
         state.pending_client_responses.clone(),
         state.client_closed.clone(),
+        cancellation.clone(),
     );
 
     // 4. Drive the real provider through the shared streaming loop.
     //    `drive_provider_stream` is the testable core; this handler just
     //    maps its outcome back to a JSON-RPC response.
-    let outcome = match drive_provider_stream(
+    let outcome = match drive_provider_stream_with_cancellation(
         &handle,
         &state.tools,
         &cwd,
@@ -592,12 +808,34 @@ async fn handle_session_prompt(
         &writer,
         &session_id,
         &permission,
+        &cancellation,
     )
     .await
     {
         Ok(o) => o,
-        Err(e) => return jsonrpc_error(id, -32603, &format!("session/prompt failed: {e}")),
+        Err(e) => {
+            let reason = e.to_string();
+            let _ = state.sessions.set_last_turn_outcome(
+                &session_id,
+                Some(JevTurnOutcome::Failed {
+                    reason: reason.clone(),
+                }),
+            );
+            state.inflight_turns.lock().await.remove(&session_id);
+            if cancellation.is_cancelled() {
+                return jsonrpc_error(id, -32800, "session prompt cancelled");
+            }
+            return jsonrpc_error(id, -32603, &format!("session/prompt failed: {reason}"));
+        }
     };
+
+    let _ = state
+        .sessions
+        .record_message(&session_id, JevRole::Assistant, &outcome.text);
+    let _ = state
+        .sessions
+        .set_last_turn_outcome(&session_id, Some(JevTurnOutcome::Passed));
+    state.inflight_turns.lock().await.remove(&session_id);
 
     let (input_tokens, output_tokens) = outcome.usage.unwrap_or((0, outcome.text.len() as u64));
     jsonrpc_result(
@@ -674,6 +912,7 @@ struct AcpPermission {
     writer: SharedWriter,
     pending: PendingClientResponses,
     client_closed: Arc<AtomicBool>,
+    cancellation: CancellationToken,
 }
 
 impl AcpPermission {
@@ -682,12 +921,14 @@ impl AcpPermission {
         writer: SharedWriter,
         pending: PendingClientResponses,
         client_closed: Arc<AtomicBool>,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             session_id,
             writer,
             pending,
             client_closed,
+            cancellation,
         }
     }
 }
@@ -742,11 +983,17 @@ impl Permission for AcpPermission {
                 return PermissionDecision::RejectOnce;
             }
 
-            let response = match timeout(Duration::from_secs(300), receiver).await {
-                Ok(Ok(response)) => response,
-                _ => {
+            let response = tokio::select! {
+                _ = self.cancellation.cancelled() => {
                     self.pending.lock().await.remove(&request_id.to_string());
                     return PermissionDecision::RejectOnce;
+                }
+                response = timeout(Duration::from_secs(300), receiver) => match response {
+                    Ok(Ok(response)) => response,
+                    _ => {
+                    self.pending.lock().await.remove(&request_id.to_string());
+                    return PermissionDecision::RejectOnce;
+                    }
                 }
             };
             let outcome = &response["result"]["outcome"];
@@ -774,7 +1021,30 @@ impl Permission for AcpPermission {
 /// into the messages, and re-enters `provider.complete()` for another round.
 /// The function returns once the model emits `MessageEnd` without another
 /// tool call.
+#[allow(dead_code)] // exercised directly by the focused stream unit tests
 async fn drive_provider_stream(
+    handle: &crate::provider::ProviderHandle,
+    tools: &mona_acp_tools::ToolRegistry,
+    cwd: &PathBuf,
+    messages: Vec<Message>,
+    writer: &SharedWriter,
+    session_id: &str,
+    permission: &(dyn Permission + Send + Sync),
+) -> anyhow::Result<PromptOutcome> {
+    drive_provider_stream_with_cancellation(
+        handle,
+        tools,
+        cwd,
+        messages,
+        writer,
+        session_id,
+        permission,
+        &CancellationToken::new(),
+    )
+    .await
+}
+
+async fn drive_provider_stream_with_cancellation(
     handle: &crate::provider::ProviderHandle,
     tools: &mona_acp_tools::ToolRegistry,
     cwd: &PathBuf,
@@ -782,6 +1052,7 @@ async fn drive_provider_stream(
     writer: &SharedWriter,
     session_id: &str,
     permission: &(dyn Permission + Send + Sync),
+    cancellation: &CancellationToken,
 ) -> anyhow::Result<PromptOutcome> {
     debug!(
         session_id,
@@ -812,7 +1083,16 @@ async fn drive_provider_stream(
         let mut current_tool: Option<ToolCall> = None;
         let mut current_tool_input = String::new();
         let mut round_tool_calls: Vec<ToolCall> = Vec::new();
-        while let Some(event) = stream.next().await {
+        loop {
+            let event = tokio::select! {
+                _ = cancellation.cancelled() => {
+                    return Err(anyhow::anyhow!("session prompt cancelled"));
+                }
+                event = stream.next() => event,
+            };
+            let Some(event) = event else {
+                break;
+            };
             match event {
                 Ok(StreamEvent::TextDelta(delta)) => {
                     outcome.text.push_str(&delta);
@@ -1155,7 +1435,7 @@ async fn push_notification(writer: &SharedWriter, session_id: &str, update: Valu
     }
 }
 
-fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> Value {
+async fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> Value {
     let session_id = match params.get("sessionId").and_then(Value::as_str) {
         Some(s) => s,
         None => return jsonrpc_error(id, -32602, "missing sessionId"),
@@ -1170,10 +1450,15 @@ fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> V
         None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
     };
 
-    if !session
-        .handle
-        .as_ref()
-        .is_some_and(|handle| handle.auth.is_some())
+    if !state
+        .auth
+        .read()
+        .expect("auth registry lock poisoned")
+        .has_auth(session.provider)
+        || !session
+            .handle
+            .as_ref()
+            .is_some_and(|handle| handle.auth.is_some())
     {
         return jsonrpc_error(
             id,
@@ -1188,6 +1473,18 @@ fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> V
         Ok(session) => session,
         Err(error) => return jsonrpc_error(id, -32602, &error.to_string()),
     };
+    if let Err(error) = persist_manual_route_trace(
+        &state.home_dir,
+        session_id,
+        &session,
+        &updated,
+        Some(new_model.to_string()),
+        Some(session.effort.clone()),
+    )
+    .await
+    {
+        return jsonrpc_error(id, -32603, &format!("persist router trace: {error}"));
+    }
     info!(session_id, old_model = %session.model, new_model = %updated.model, "live model set");
     jsonrpc_result(
         id,
@@ -1199,7 +1496,11 @@ fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> V
     )
 }
 
-fn handle_session_set_reasoning_effort(id: Value, params: &Value, state: &ServerState) -> Value {
+async fn handle_session_set_reasoning_effort(
+    id: Value,
+    params: &Value,
+    state: &ServerState,
+) -> Value {
     let session_id = match params.get("sessionId").and_then(Value::as_str) {
         Some(s) => s,
         None => return jsonrpc_error(id, -32602, "missing sessionId"),
@@ -1213,10 +1514,15 @@ fn handle_session_set_reasoning_effort(id: Value, params: &Value, state: &Server
         Some(session) => session,
         None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
     };
-    if !session
-        .handle
-        .as_ref()
-        .is_some_and(|handle| handle.auth.is_some())
+    if !state
+        .auth
+        .read()
+        .expect("auth registry lock poisoned")
+        .has_auth(session.provider)
+        || !session
+            .handle
+            .as_ref()
+            .is_some_and(|handle| handle.auth.is_some())
     {
         return jsonrpc_error(
             id,
@@ -1231,6 +1537,18 @@ fn handle_session_set_reasoning_effort(id: Value, params: &Value, state: &Server
         Ok(session) => session,
         Err(error) => return jsonrpc_error(id, -32602, &error.to_string()),
     };
+    if let Err(error) = persist_manual_route_trace(
+        &state.home_dir,
+        session_id,
+        &session,
+        &updated,
+        Some(session.model.clone()),
+        Some(effort.to_string()),
+    )
+    .await
+    {
+        return jsonrpc_error(id, -32603, &format!("persist router trace: {error}"));
+    }
     info!(session_id, effort = %updated.effort, "live reasoning effort set");
     jsonrpc_result(
         id,
@@ -1240,6 +1558,36 @@ fn handle_session_set_reasoning_effort(id: Value, params: &Value, state: &Server
             "applied": true,
         }),
     )
+}
+
+async fn persist_manual_route_trace(
+    home_dir: &std::path::Path,
+    session_id: &str,
+    previous: &crate::session::Session,
+    actual: &crate::session::Session,
+    requested_model: Option<String>,
+    requested_effort: Option<String>,
+) -> anyhow::Result<()> {
+    let trace = RouterTrace {
+        trace_id: uuid::Uuid::new_v4(),
+        session_id: session_id.to_string(),
+        prompt_fingerprint: "manual-setter".to_string(),
+        occurred_at: chrono::Utc::now().timestamp_millis(),
+        trigger: TraceTrigger::UserOverride,
+        proposed_tier: None,
+        proposed_effort: requested_effort.clone(),
+        requested_model,
+        requested_effort,
+        applied: true,
+        application_error: None,
+        confidence: 1.0,
+        rationale: "user requested runtime configuration".to_string(),
+        old_model: previous.model.clone(),
+        new_model: actual.model.clone(),
+        old_effort: previous.effort.clone(),
+        new_effort: actual.effort.clone(),
+    };
+    crate::trace::persist(home_dir, &trace).await
 }
 
 fn jsonrpc_result(id: Value, result: Value) -> Value {
@@ -1617,6 +1965,7 @@ mod tests {
             writer,
             pending.clone(),
             Arc::new(AtomicBool::new(false)),
+            CancellationToken::new(),
         ));
         let request_task = {
             let permission = permission.clone();

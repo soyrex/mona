@@ -25,8 +25,8 @@ use crate::session::Session;
 use crate::trace::RouterTrace;
 use anyhow::Result;
 use mona_jev::{
-    JevClassifier, JevClassifyRequest, JevRoutePlan, JevTurnOutcome, ModelTier, PermissionTier,
-    SafetyVerdict, check_safety, safety::SafetyConfig,
+    JevClassifier, JevClassifyRequest, JevMessage, JevRoutePlan, JevTurnOutcome, ModelTier,
+    PermissionTier, SafetyVerdict, check_safety, safety::SafetyConfig,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -85,6 +85,46 @@ pub struct TurnRoutingDecision {
     pub sensitive: bool,
 }
 
+/// Create an auditable no-classification decision. Used for the explicit
+/// `off` policy; it must not invoke the classifier or invent a proposal.
+pub fn skipped_routing_decision(
+    session: &Session,
+    user_message: &str,
+    reason: &str,
+) -> TurnRoutingDecision {
+    let trace = RouterTrace {
+        trace_id: Uuid::new_v4(),
+        session_id: session.id.clone(),
+        prompt_fingerprint: fingerprint(user_message),
+        occurred_at: now_ms(),
+        trigger: crate::trace::TraceTrigger::TurnReclassified,
+        proposed_tier: None,
+        proposed_effort: None,
+        requested_model: None,
+        requested_effort: None,
+        applied: false,
+        application_error: None,
+        confidence: 1.0,
+        rationale: reason.to_string(),
+        old_model: session.model.clone(),
+        new_model: session.model.clone(),
+        old_effort: session.effort.clone(),
+        new_effort: session.effort.clone(),
+    };
+    TurnRoutingDecision {
+        verdict: SafetyVerdict::Refuse,
+        applied_plan: None,
+        trace,
+        new_model: session.model.clone(),
+        new_effort: session.effort.clone(),
+        requested_model: None,
+        requested_effort: None,
+        new_tier: None,
+        reason: reason.to_string(),
+        sensitive: false,
+    }
+}
+
 /// Outcome of running the per-turn hook.
 pub async fn run_turn_with_jev(
     classifier: Arc<dyn JevClassifier>,
@@ -96,51 +136,95 @@ pub async fn run_turn_with_jev(
     config: &RouterConfig,
     _home_dir: &std::path::Path,
 ) -> Result<TurnRoutingDecision> {
+    run_turn_with_jev_context(
+        classifier,
+        session,
+        user_message,
+        turn_count,
+        swaps_in_session,
+        Vec::new(),
+        last_turn_outcome,
+        None,
+        true,
+        config,
+        _home_dir,
+    )
+    .await
+}
+
+/// Context-aware router used by the ACP runtime. `cached_plan` is a
+/// per-session last-known-good classifier result; it is only consulted when
+/// classification itself fails, never to bypass the normal safety gates.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_turn_with_jev_context(
+    classifier: Arc<dyn JevClassifier>,
+    session: &Session,
+    user_message: &str,
+    turn_count: u32,
+    swaps_in_session: u32,
+    recent_messages: Vec<JevMessage>,
+    last_turn_outcome: Option<JevTurnOutcome>,
+    cached_plan: Option<JevRoutePlan>,
+    enforce_cooldown: bool,
+    config: &RouterConfig,
+    _home_dir: &std::path::Path,
+) -> Result<TurnRoutingDecision> {
     // 1. Build the classify request
-    let req = build_request_from_session(user_message, session, last_turn_outcome);
+    let req = build_request_from_session_with_context(
+        user_message,
+        session,
+        recent_messages,
+        last_turn_outcome,
+    );
 
     // 2. Classify
     let plan = match classifier.classify(&req).await {
         Ok(p) => p,
         Err(e) => {
-            warn!(error = %e, "classifier errored; keeping current model");
-            let trace = RouterTrace {
-                trace_id: Uuid::new_v4(),
-                session_id: session.id.clone(),
-                prompt_fingerprint: fingerprint(user_message),
-                occurred_at: now_ms(),
-                trigger: crate::trace::TraceTrigger::ClassifierUnavailable,
-                proposed_tier: None,
-                proposed_effort: None,
-                requested_model: None,
-                requested_effort: None,
-                applied: false,
-                application_error: None,
-                confidence: 0.0,
-                rationale: format!("classifier error: {e}"),
-                old_model: session.model.clone(),
-                new_model: session.model.clone(),
-                old_effort: session.effort.clone(),
-                new_effort: session.effort.clone(),
-            };
-            return Ok(TurnRoutingDecision {
-                verdict: SafetyVerdict::Refuse,
-                applied_plan: None,
-                trace,
-                new_model: session.model.clone(),
-                new_effort: session.effort.clone(),
-                requested_model: None,
-                requested_effort: None,
-                new_tier: None,
-                reason: format!("classifier error: {e}"),
-                sensitive: false, // unknown — classifier never returned a plan
-            });
+            if let Some(plan) = cached_plan {
+                warn!(error = %e, "classifier errored; using cached plan through normal safety gates");
+                plan
+            } else {
+                warn!(error = %e, "classifier errored; keeping current model");
+                let trace = RouterTrace {
+                    trace_id: Uuid::new_v4(),
+                    session_id: session.id.clone(),
+                    prompt_fingerprint: fingerprint(user_message),
+                    occurred_at: now_ms(),
+                    trigger: crate::trace::TraceTrigger::ClassifierUnavailable,
+                    proposed_tier: None,
+                    proposed_effort: None,
+                    requested_model: None,
+                    requested_effort: None,
+                    applied: false,
+                    application_error: None,
+                    confidence: 0.0,
+                    rationale: format!("classifier error: {e}"),
+                    old_model: session.model.clone(),
+                    new_model: session.model.clone(),
+                    old_effort: session.effort.clone(),
+                    new_effort: session.effort.clone(),
+                };
+                return Ok(TurnRoutingDecision {
+                    verdict: SafetyVerdict::Refuse,
+                    applied_plan: None,
+                    trace,
+                    new_model: session.model.clone(),
+                    new_effort: session.effort.clone(),
+                    requested_model: None,
+                    requested_effort: None,
+                    new_tier: None,
+                    reason: format!("classifier error: {e}"),
+                    sensitive: false, // unknown — classifier never returned a plan
+                });
+            }
         }
     };
 
     // 3. Apply safety gates
-    let cooldown_active =
-        (turn_count > 0) && ((turn_count % config.min_turns_between_swaps.max(1)) != 0);
+    let cooldown_active = enforce_cooldown
+        && (turn_count > 0)
+        && ((turn_count % config.min_turns_between_swaps.max(1)) != 0);
     let safety_config = SafetyConfig {
         confidence_floor: config.confidence_floor,
         max_permission_tier_widening: PermissionTier::Read, // never widen
@@ -331,6 +415,18 @@ pub fn build_request_from_session(
     session: &Session,
     last_turn_outcome: Option<JevTurnOutcome>,
 ) -> JevClassifyRequest {
+    build_request_from_session_with_context(user_message, session, Vec::new(), last_turn_outcome)
+}
+
+/// Build a classifier request using the persisted, already bounded session
+/// context. The caller owns truncation/persistence so this function remains
+/// pure and useful in unit tests.
+pub fn build_request_from_session_with_context(
+    user_message: &str,
+    session: &Session,
+    recent_messages: Vec<JevMessage>,
+    last_turn_outcome: Option<JevTurnOutcome>,
+) -> JevClassifyRequest {
     let available_models = [
         ModelTier::Fast,
         ModelTier::Balanced,
@@ -373,7 +469,7 @@ pub fn build_request_from_session(
     }
     JevClassifyRequest {
         prompt: user_message.to_string(),
-        recent_messages: vec![],
+        recent_messages,
         last_turn_outcome,
         available_models,
         available_efforts,
@@ -641,5 +737,38 @@ mod tests {
             Some("model unavailable")
         );
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn context_aware_router_passes_recent_messages_and_last_outcome() {
+        let classifier = Arc::new(MockJevClassifier::new());
+        let prior = vec![JevMessage {
+            role: mona_jev::JevRole::Assistant,
+            content: "previous answer".into(),
+        }];
+        let outcome = Some(JevTurnOutcome::Failed {
+            reason: "provider stopped".into(),
+        });
+        run_turn_with_jev_context(
+            classifier.clone(),
+            &session(),
+            "retry this",
+            0,
+            0,
+            prior.clone(),
+            outcome.clone(),
+            None,
+            true,
+            &RouterConfig::default(),
+            std::path::Path::new("/tmp/mona-test"),
+        )
+        .await
+        .unwrap();
+        let request = classifier.last_request().expect("classification request");
+        assert_eq!(request.recent_messages[0].content, prior[0].content);
+        assert!(matches!(
+            request.last_turn_outcome,
+            Some(JevTurnOutcome::Failed { .. })
+        ));
     }
 }
