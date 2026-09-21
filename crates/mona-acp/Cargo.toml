@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 mona-base = { path = "../mona-base", default-features = false }
+mona-app-core = { path = "../mona-app-core", default-features = false }
 mona-provider-openai-runtime = { path = "../mona-provider-openai-runtime" }
 mona-provider-anthropic-runtime = { path = "../mona-provider-anthropic-runtime" }
 mona-provider-openrouter-runtime = { path = "../mona-provider-openrouter-runtime" }

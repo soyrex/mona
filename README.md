@@ -63,20 +63,20 @@ We **do not** maintain a fork relationship with upstream's issue tracker. For fo
 
 ## Phase 2 architecture
 
-Phase 2 uses a narrow ACP-owned provider loop instead of routing ACP tools
-through the full upstream `Agent` registry. This is deliberate: the upstream
-`Agent::run_turn` API executes registered tools directly and has no ACP
-permission callback. Reusing it unchanged would bypass Monitter's one-time
-permission boundary or expose a much larger tool surface. The dedicated loop
-keeps the same provider stream types while limiting execution to the reviewed
-`mona-acp-tools` registry, an eight-round bound, and `allow_once`/`reject_once`
-host decisions.
+Phase 2 runs turns through Mona's canonical `Agent` loop, so ACP sessions use
+the same persisted transcript, provider continuation ID, compaction and
+tool-result recovery behavior as the native harness. The Agent is constructed
+with an empty registry and only four reviewed ACP adapters (`read`, `write`,
+`bash`, and `ls`) plus host-supplied HTTP MCP tools. Mutating and remote tools
+still cross Monitter's `allow_once`/`reject_once` boundary before execution;
+embedding the Agent does not expose the upstream default tool registry.
 
-The server persists bounded, redacted session context under `MONA_HOME`,
-reconstructs provider handles only from current non-expired credentials,
-supports concurrent in-flight cancellation, and emits requested-versus-actual
-`router_trace` updates. `off`, `recommend`, `safe_auto`, and `per_turn` routing
-policies never change provider/account ownership or widen tool permissions.
+The server keeps its bounded, redacted routing context and persists the
+canonical conversation under `MONA_HOME/sessions`. It reconstructs provider
+handles only from current non-expired credentials, supports concurrent
+in-flight cancellation, and emits requested-versus-actual `router_trace`
+updates. `off`, `recommend`, `safe_auto`, and `per_turn` routing policies never
+change provider/account ownership or widen tool permissions.
 
 Live Jev classification is network-off by default. Operators must explicitly
 set `MONA_ACP_LIVE_JEV=1`; any other value keeps the deterministic rule-based

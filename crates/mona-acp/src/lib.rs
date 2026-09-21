@@ -15,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 
+mod agentic;
 pub mod auth;
 pub mod initialize;
 pub mod live_jev;

@@ -3826,6 +3826,7 @@ dependencies = [
  "chrono",
  "futures",
  "mona-acp-tools",
+ "mona-app-core",
  "mona-base",
  "mona-jev",
  "mona-message-types",

@@ -150,6 +150,48 @@ struct ExplicitPinProvider {
     set_model_requests: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
+#[derive(Clone, Default)]
+struct EmbeddedAuthOwnerProvider {
+    set_model_attempts: Arc<std::sync::atomic::AtomicUsize>,
+    auth_refreshes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl Provider for EmbeddedAuthOwnerProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<EventStream> {
+        unreachable!("EmbeddedAuthOwnerProvider does not complete requests")
+    }
+
+    fn name(&self) -> &str {
+        "embedded-auth-owner"
+    }
+
+    fn model(&self) -> String {
+        "current-model".to_string()
+    }
+
+    fn set_model(&self, _model: &str) -> Result<()> {
+        self.set_model_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        anyhow::bail!("synthetic model restore failure")
+    }
+
+    fn on_auth_changed(&self) {
+        self.auth_refreshes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(self.clone())
+    }
+}
+
 impl ExplicitPinProvider {
     fn new(model: &str) -> Self {
         Self {
@@ -1266,6 +1308,61 @@ async fn explicit_provider_pin_is_persisted_and_reapplied_on_restore() {
         ["openrouter:z-ai/glm-5.2@Novita"]
     );
     assert_eq!(restored_agent.provider_model(), "z-ai/glm-5.2@Novita");
+}
+
+#[tokio::test]
+async fn new_with_session_restores_provider_continuation_id() {
+    let _guard = crate::storage::lock_test_env();
+    let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+    let registry = Registry::empty();
+    let mut session = crate::session::Session::create_with_id(
+        "embedded_agent_provider_continuation".to_string(),
+        None,
+        None,
+    );
+    session.provider_session_id = Some("provider-conversation-123".to_string());
+
+    let agent = Agent::new_with_session(provider, registry, session, Some(HashSet::new()));
+
+    assert_eq!(
+        agent.provider_session_id.as_deref(),
+        Some("provider-conversation-123")
+    );
+}
+
+#[tokio::test]
+async fn embedded_session_attach_does_not_reload_ambient_auth() {
+    let _guard = crate::storage::lock_test_env();
+    let provider = Arc::new(EmbeddedAuthOwnerProvider::default());
+    let provider_dyn: Arc<dyn Provider> = provider.clone();
+    let registry = Registry::empty();
+    let mut session = crate::session::Session::create_with_id(
+        "embedded_agent_auth_owner".to_string(),
+        None,
+        None,
+    );
+    session.model = Some("stored-model".to_string());
+
+    let _agent = Agent::new_with_session_without_auth_refresh(
+        provider_dyn,
+        registry,
+        session,
+        Some(HashSet::new()),
+    );
+
+    assert_eq!(
+        provider
+            .set_model_attempts
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        provider
+            .auth_refreshes
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "embedded attachment must leave credential ownership with the caller"
+    );
 }
 
 #[tokio::test]

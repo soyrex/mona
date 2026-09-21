@@ -23,7 +23,7 @@ use crate::turn::{
     RouterConfig, decision_to_router_trace_value, finalize_routing_decision,
     run_turn_with_jev_context, skipped_routing_decision,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use mona_jev::{JevClassifier, JevRole, JevTurnOutcome};
 use mona_message_types::{ContentBlock, Message, Role, StreamEvent, ToolCall};
@@ -450,6 +450,9 @@ async fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -
             true
         })
         .unwrap_or(false);
+    for signal in mona_app_core::turn_cancel_registry::active_turn_signals(session_id) {
+        signal.fire();
+    }
     if state.sessions.cancel(session_id) {
         state.session_counters.lock().await.remove(session_id);
         state.session_mcp_tools.lock().await.remove(session_id);
@@ -882,19 +885,19 @@ async fn handle_session_prompt(
         .cloned()
         .unwrap_or_default();
 
-    // 4. Drive the real provider through the shared streaming loop.
-    //    `drive_provider_stream` is the testable core; this handler just
-    //    maps its outcome back to a JSON-RPC response.
-    let outcome = match drive_provider_stream_with_cancellation(
-        &handle,
-        &state.tools,
-        &mcp_tools,
-        &cwd,
-        vec![Message::user(&text)],
+    // 4. Drive the real provider through Mona's canonical Agent. The Agent
+    //    owns full transcript replay, compaction, provider continuation IDs,
+    //    tool-result repair, and durable resume. ACP-owned tool adapters keep
+    //    every mutation behind Monitter's allow-once boundary.
+    let outcome = match drive_canonical_agent(
+        &session,
+        state.tools.clone(),
+        mcp_tools,
+        Arc::new(permission),
         &writer,
         &session_id,
-        &permission,
-        &cancellation,
+        &text,
+        cancellation.clone(),
     )
     .await
     {
@@ -950,6 +953,248 @@ pub(crate) struct PromptOutcome {
     pub stop_reason: Option<String>,
     pub usage: Option<(u64, u64)>,
     pub error: Option<String>,
+}
+
+async fn drive_canonical_agent(
+    session: &crate::session::Session,
+    tools: Arc<mona_acp_tools::ToolRegistry>,
+    mcp_tools: SessionMcpTools,
+    approval: Arc<dyn crate::agentic::ApprovalBroker>,
+    writer: &SharedWriter,
+    session_id: &str,
+    prompt: &str,
+    cancellation: CancellationToken,
+) -> anyhow::Result<PromptOutcome> {
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let run = crate::agentic::run_turn(
+        session,
+        tools,
+        mcp_tools,
+        approval,
+        event_tx,
+        prompt,
+        cancellation,
+    );
+    let collect = async {
+        let mut outcome = PromptOutcome::default();
+        let mut current_tool_call_id: Option<String> = None;
+        while let Some(event) = event_rx.recv().await {
+            let value = serde_json::to_value(event).context("serialize Mona agent event")?;
+            let kind = value
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match kind {
+                "text_delta" => {
+                    if let Some(text) = value.get("text").and_then(Value::as_str) {
+                        outcome.text.push_str(text);
+                        push_notification(
+                            writer,
+                            session_id,
+                            json!({
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": { "type": "text", "text": text },
+                            }),
+                        )
+                        .await;
+                    }
+                }
+                "text_replace" => {
+                    if let Some(text) = value.get("text").and_then(Value::as_str) {
+                        outcome.text = text.to_string();
+                        push_notification(
+                            writer,
+                            session_id,
+                            json!({
+                                "sessionUpdate": "agent_message_replace",
+                                "content": { "type": "text", "text": text },
+                            }),
+                        )
+                        .await;
+                    }
+                }
+                "text_done" => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({ "sessionUpdate": "agent_message_done" }),
+                    )
+                    .await;
+                }
+                "reasoning_delta" => {
+                    if let Some(text) = value.get("text").and_then(Value::as_str) {
+                        push_notification(
+                            writer,
+                            session_id,
+                            json!({
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": { "type": "text", "text": text },
+                            }),
+                        )
+                        .await;
+                    }
+                }
+                "reasoning_done" => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({ "sessionUpdate": "agent_thought_chunk", "phase": "end" }),
+                    )
+                    .await;
+                }
+                "tool_start" => {
+                    current_tool_call_id =
+                        value.get("id").and_then(Value::as_str).map(str::to_string);
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": value.get("id"),
+                            "title": value.get("name"),
+                            "status": "pending",
+                        }),
+                    )
+                    .await;
+                }
+                "tool_input" => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": current_tool_call_id,
+                            "rawInputDelta": value.get("delta"),
+                        }),
+                    )
+                    .await;
+                }
+                "tool_exec" => {
+                    current_tool_call_id =
+                        value.get("id").and_then(Value::as_str).map(str::to_string);
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": value.get("id"),
+                            "title": value.get("name"),
+                            "status": "in_progress",
+                        }),
+                    )
+                    .await;
+                }
+                "tool_done" => {
+                    let failed = value.get("error").is_some_and(|error| !error.is_null());
+                    let output = value
+                        .get("output")
+                        .and_then(Value::as_str)
+                        .and_then(|output| serde_json::from_str::<Value>(output).ok())
+                        .unwrap_or_else(|| value.get("output").cloned().unwrap_or(Value::Null));
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": value.get("id"),
+                            "title": value.get("name"),
+                            "status": if failed { "failed" } else { "completed" },
+                            "rawOutput": output,
+                        }),
+                    )
+                    .await;
+                    current_tool_call_id = None;
+                }
+                "tokens" => {
+                    let input = value.get("input").and_then(Value::as_u64).unwrap_or(0);
+                    let output = value.get("output").and_then(Value::as_u64).unwrap_or(0);
+                    outcome.usage = Some((input, output));
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "usage_update",
+                            "inputTokens": input,
+                            "outputTokens": output,
+                        }),
+                    )
+                    .await;
+                }
+                "message_end" => {
+                    outcome.stop_reason = value
+                        .get("stop_reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                }
+                "retry_rollback" => {
+                    // The Agent is about to replay the provider response from
+                    // the top. Keep the RPC result and the rendered transcript
+                    // consistent by discarding text from the failed attempt.
+                    outcome.text.clear();
+                    current_tool_call_id = None;
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "agent_message_replace",
+                            "content": { "type": "text", "text": "" },
+                        }),
+                    )
+                    .await;
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "agent_status",
+                            "kind": kind,
+                            "detail": value,
+                        }),
+                    )
+                    .await;
+                }
+                "compaction" | "connection_type" | "connection_phase" | "status_detail"
+                | "upstream_provider" => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "agent_status",
+                            "kind": kind,
+                            "detail": value,
+                        }),
+                    )
+                    .await;
+                }
+                "error" => {
+                    let message = value
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Mona agent turn failed")
+                        .to_string();
+                    outcome.error = Some(message.clone());
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({ "sessionUpdate": "error", "message": message }),
+                    )
+                    .await;
+                }
+                "interrupted" => {
+                    outcome.error = Some("session prompt cancelled".to_string());
+                }
+                _ => {}
+            }
+        }
+        Ok::<PromptOutcome, anyhow::Error>(outcome)
+    };
+
+    let (run_result, collected) = tokio::join!(run, collect);
+    let outcome = collected?;
+    run_result?;
+    if let Some(error) = outcome.error.clone() {
+        bail!(error);
+    }
+    Ok(outcome)
 }
 
 /// One permission decision the host (Monitter) must make before mona-acp
@@ -1091,6 +1336,19 @@ impl Permission for AcpPermission {
                 PermissionDecision::RejectOnce
             }
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::agentic::ApprovalBroker for AcpPermission {
+    async fn approve(&self, request: crate::agentic::ApprovalRequest) -> bool {
+        self.request(&PermissionRequest {
+            request_id: request.request_id,
+            tool_name: request.tool_name,
+            input: request.input,
+        })
+        .await
+            == PermissionDecision::AllowOnce
     }
 }
 

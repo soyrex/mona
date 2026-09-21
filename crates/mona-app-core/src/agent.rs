@@ -300,6 +300,7 @@ impl Agent {
         let working_dir = session.working_dir.as_deref().map(std::path::Path::new);
         let agents_md_snapshot = crate::prompt::load_agents_md_files_from_dir(working_dir);
         let initial_provider_model = provider.model();
+        let provider_session_id = session.provider_session_id.clone();
         let tool_policy_registration = crate::tool::register_session_tool_policy(
             &session.id,
             allowed_tools.clone(),
@@ -316,7 +317,7 @@ impl Agent {
             _tool_policy_registration: tool_policy_registration,
             mcp_tools_mode: tool_config.mcp_tools,
             mcp_tools_token_threshold: tool_config.mcp_tools_token_threshold,
-            provider_session_id: None,
+            provider_session_id,
             last_upstream_provider: None,
             last_connection_type: None,
             last_status_detail: None,
@@ -460,6 +461,30 @@ impl Agent {
         session: Session,
         allowed_tools: Option<HashSet<String>>,
     ) -> Self {
+        Self::new_with_session_inner(provider, registry, session, allowed_tools, true)
+    }
+
+    /// Attach an already-configured provider to a stored session without
+    /// consulting ambient credential storage if model restoration fails.
+    ///
+    /// Embedded transports such as ACP own provider authentication and must
+    /// not let the canonical Agent silently reload or replace that authority.
+    pub fn new_with_session_without_auth_refresh(
+        provider: Arc<dyn Provider>,
+        registry: Registry,
+        session: Session,
+        allowed_tools: Option<HashSet<String>>,
+    ) -> Self {
+        Self::new_with_session_inner(provider, registry, session, allowed_tools, false)
+    }
+
+    fn new_with_session_inner(
+        provider: Arc<dyn Provider>,
+        registry: Registry,
+        session: Session,
+        allowed_tools: Option<HashSet<String>>,
+        refresh_auth_on_model_failure: bool,
+    ) -> Self {
         let tool_selection = if let Some(allowed_tools) = allowed_tools {
             crate::config::ToolSelection {
                 allowed_tools: Some(allowed_tools),
@@ -486,10 +511,15 @@ impl Agent {
                     agent.session.provider_key.as_deref(),
                     agent.session.route_api_method.as_deref(),
                 );
-            if let Err(e) = crate::provider::set_model_with_auth_refresh(
-                agent.provider.as_ref(),
-                &model_request,
-            ) {
+            let restore_result = if refresh_auth_on_model_failure {
+                crate::provider::set_model_with_auth_refresh(
+                    agent.provider.as_ref(),
+                    &model_request,
+                )
+            } else {
+                agent.provider.set_model(&model_request)
+            };
+            if let Err(e) = restore_result {
                 logging::error(&format!(
                     "Failed to restore session model '{}' via '{}': {}",
                     model, model_request, e
