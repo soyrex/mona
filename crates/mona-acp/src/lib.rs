@@ -18,6 +18,7 @@
 pub mod auth;
 pub mod initialize;
 pub mod live_jev;
+pub mod mcp;
 pub mod policy;
 pub mod provider;
 pub mod provider_whitelist;

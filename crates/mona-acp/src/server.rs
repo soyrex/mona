@@ -15,6 +15,7 @@
 
 use crate::auth::AuthRegistry;
 use crate::initialize::initialize_result;
+use crate::mcp::SessionMcpTools;
 use crate::policy::JevRoutePolicy;
 use crate::session::{SessionInfo, SessionRegistry};
 use crate::trace::{RouterTrace, TraceTrigger};
@@ -71,6 +72,10 @@ pub struct ServerState {
     /// `ls` by default. Hosts can register additional tools before
     /// launching the server.
     pub tools: Arc<mona_acp_tools::ToolRegistry>,
+    /// Host-supplied HTTP MCP tools are session-scoped and intentionally
+    /// runtime-only: their headers and negotiated MCP session IDs must never
+    /// enter durable session metadata.
+    session_mcp_tools: Arc<Mutex<HashMap<String, SessionMcpTools>>>,
     /// Responses to server-initiated JSON-RPC requests, principally
     /// `session/request_permission`. The stdin reader remains live while a
     /// prompt task waits on the matching oneshot sender.
@@ -143,6 +148,7 @@ impl ServerState {
             auth: Arc::new(RwLock::new(auth)),
             session_counters: Arc::new(Mutex::new(SessionCounters::default())),
             tools: Arc::new(mona_acp_tools::default_registry()),
+            session_mcp_tools: Arc::new(Mutex::new(HashMap::new())),
             pending_client_responses: Arc::new(Mutex::new(HashMap::new())),
             client_closed: Arc::new(AtomicBool::new(false)),
             inflight_turns: Arc::new(Mutex::new(HashMap::new())),
@@ -258,7 +264,7 @@ pub async fn handle_frame(line: &str, state: &ServerState, writer: SharedWriter)
         "initialize" => handle_initialize(id, &params, state).await,
         "session/new" => handle_session_new(id, &params, state).await,
         "session/list" => handle_session_list(id, state),
-        "session/resume" => handle_session_resume(id, &params, state),
+        "session/resume" => handle_session_resume(id, &params, state).await,
         "session/cancel" => handle_session_cancel(id, &params, state).await,
         "session/auth" => handle_session_auth(id, &params, state),
         "session/jev_route" => handle_session_jev_route(id, &params, state).await,
@@ -284,7 +290,26 @@ async fn handle_initialize(id: Value, _params: &Value, state: &ServerState) -> V
     )
 }
 
+async fn session_mcp_tools(params: &Value) -> Result<SessionMcpTools> {
+    timeout(
+        crate::mcp::MCP_CONNECT_TIMEOUT,
+        SessionMcpTools::from_acp_params(params),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("HTTP MCP initialization exceeded 20 seconds"))?
+}
+
 async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> Value {
+    let mcp_tools = match session_mcp_tools(params).await {
+        Ok(tools) => tools,
+        Err(error) => {
+            return jsonrpc_error(
+                id,
+                -32602,
+                &format!("invalid HTTP MCP configuration: {error}"),
+            );
+        }
+    };
     let provider_str = params
         .get("provider")
         .and_then(Value::as_str)
@@ -296,20 +321,28 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    let auth = state.auth.read().expect("auth registry lock poisoned");
-    let provider = match crate::provider_whitelist::parse_provider_with_default(provider_str, &auth)
-    {
-        Ok(p) => p,
-        Err(e) => return jsonrpc_error(id, -32602, &format!("{e}")),
+    let new_session = {
+        let auth = state.auth.read().expect("auth registry lock poisoned");
+        let provider =
+            match crate::provider_whitelist::parse_provider_with_default(provider_str, &auth) {
+                Ok(provider) => provider,
+                Err(error) => return jsonrpc_error(id, -32602, &format!("{error}")),
+            };
+        // Reuse the provider_str for the existing SessionRegistry call. The
+        // registry also calls parse_provider; if it errors with "auto", we
+        // catch that above and never reach here.
+        state
+            .sessions
+            .new_session(provider.as_str(), model, effort, working_dir, &auth)
     };
-    // Reuse the provider_str for the existing SessionRegistry call. The
-    // registry also calls parse_provider; if it errors with "auto", we
-    // catch that above and never reach here.
-    match state
-        .sessions
-        .new_session(provider.as_str(), model, effort, working_dir, &auth)
-    {
+    match new_session {
         Ok(session) => {
+            let mcp_tool_count = mcp_tools.definitions().len();
+            state
+                .session_mcp_tools
+                .lock()
+                .await
+                .insert(session.id.clone(), mcp_tools);
             info!(session_id = %session.id, provider = %session.provider.as_str(),
                   model = %session.model, "created session");
             let info: SessionInfo = (&session).into();
@@ -323,6 +356,7 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
                     "providerName": info.provider_name,
                     "monitterPhase": "3.5",
                     "jev_routing": true,
+                    "mcpToolCount": mcp_tool_count,
                 }),
             )
         }
@@ -349,14 +383,33 @@ fn handle_session_list(id: Value, state: &ServerState) -> Value {
     jsonrpc_result(id, json!({ "sessions": sessions }))
 }
 
-fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -> Value {
+async fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -> Value {
     let session_id = match params.get("sessionId").and_then(Value::as_str) {
         Some(s) => s,
         None => return jsonrpc_error(id, -32602, "missing sessionId"),
     };
-    let auth = state.auth.read().expect("auth registry lock poisoned");
-    match state.sessions.resume(session_id, &auth) {
+    let mcp_tools = match session_mcp_tools(params).await {
+        Ok(tools) => tools,
+        Err(error) => {
+            return jsonrpc_error(
+                id,
+                -32602,
+                &format!("invalid HTTP MCP configuration: {error}"),
+            );
+        }
+    };
+    let resumed = {
+        let auth = state.auth.read().expect("auth registry lock poisoned");
+        state.sessions.resume(session_id, &auth)
+    };
+    match resumed {
         Ok(s) => {
+            let mcp_tool_count = mcp_tools.definitions().len();
+            state
+                .session_mcp_tools
+                .lock()
+                .await
+                .insert(s.id.clone(), mcp_tools);
             let info: SessionInfo = (&s).into();
             jsonrpc_result(
                 id,
@@ -366,6 +419,7 @@ fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -> Valu
                     "model": info.model,
                     "effort": info.effort,
                     "resumed": true,
+                    "mcpToolCount": mcp_tool_count,
                 }),
             )
         }
@@ -398,6 +452,7 @@ async fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -
         .unwrap_or(false);
     if state.sessions.cancel(session_id) {
         state.session_counters.lock().await.remove(session_id);
+        state.session_mcp_tools.lock().await.remove(session_id);
         info!(session_id, "session cancelled");
         jsonrpc_result(
             id,
@@ -819,6 +874,13 @@ async fn handle_session_prompt(
         state.client_closed.clone(),
         cancellation.clone(),
     );
+    let mcp_tools = state
+        .session_mcp_tools
+        .lock()
+        .await
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default();
 
     // 4. Drive the real provider through the shared streaming loop.
     //    `drive_provider_stream` is the testable core; this handler just
@@ -826,6 +888,7 @@ async fn handle_session_prompt(
     let outcome = match drive_provider_stream_with_cancellation(
         &handle,
         &state.tools,
+        &mcp_tools,
         &cwd,
         vec![Message::user(&text)],
         &writer,
@@ -1057,6 +1120,7 @@ async fn drive_provider_stream(
     drive_provider_stream_with_cancellation(
         handle,
         tools,
+        &SessionMcpTools::default(),
         cwd,
         messages,
         writer,
@@ -1070,6 +1134,7 @@ async fn drive_provider_stream(
 async fn drive_provider_stream_with_cancellation(
     handle: &crate::provider::ProviderHandle,
     tools: &mona_acp_tools::ToolRegistry,
+    mcp_tools: &SessionMcpTools,
     cwd: &PathBuf,
     mut messages: Vec<Message>,
     writer: &SharedWriter,
@@ -1084,7 +1149,9 @@ async fn drive_provider_stream_with_cancellation(
         "drive_provider_stream opening provider.complete"
     );
 
-    let tool_defs = tools.definitions();
+    let mut tool_defs = tools.definitions();
+    tool_defs.extend(mcp_tools.definitions());
+    tool_defs.sort_by(|left, right| left.name.cmp(&right.name));
     let mut outcome = PromptOutcome::default();
 
     // Cap the blast radius if the model loops on a tool or repeatedly asks
@@ -1374,6 +1441,38 @@ async fn drive_provider_stream_with_cancellation(
                     match decision {
                         PermissionDecision::AllowOnce => {
                             tool.run(tool_call.input.clone(), cwd).await
+                        }
+                        PermissionDecision::RejectOnce => {
+                            Err(mona_acp_tools::ToolError::PermissionDenied)
+                        }
+                    }
+                }
+                None if mcp_tools.contains(&tool_call.name) => {
+                    let decision = permission
+                        .request(&PermissionRequest {
+                            request_id: tool_call.id.clone(),
+                            tool_name: tool_call.name.clone(),
+                            input: tool_call.input.clone(),
+                        })
+                        .await;
+                    match decision {
+                        PermissionDecision::AllowOnce => {
+                            // The actual request is deliberately made only
+                            // after host approval. Re-run through the
+                            // runtime surface rather than accepting a
+                            // speculative pre-approval result.
+                            match mcp_tools
+                                .call(&tool_call.name, tool_call.input.clone())
+                                .await
+                            {
+                                Ok(Some(value)) => Ok(mona_acp_tools::ToolOutput::ok(value)),
+                                Ok(None) => {
+                                    Err(mona_acp_tools::ToolError::Unknown(tool_call.name.clone()))
+                                }
+                                Err(error) => Err(mona_acp_tools::ToolError::Execution {
+                                    message: error.to_string(),
+                                }),
+                            }
                         }
                         PermissionDecision::RejectOnce => {
                             Err(mona_acp_tools::ToolError::PermissionDenied)
@@ -1892,10 +1991,12 @@ mod tests {
             assert_eq!(response["result"]["interrupted"], true);
         };
         let tools = mona_acp_tools::default_registry();
+        let mcp_tools = SessionMcpTools::default();
         let cwd = PathBuf::from("/tmp");
         let stream = drive_provider_stream_with_cancellation(
             &handle,
             &tools,
+            &mcp_tools,
             &cwd,
             vec![Message::user("block")],
             &writer,

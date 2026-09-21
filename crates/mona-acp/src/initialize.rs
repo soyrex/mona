@@ -44,6 +44,10 @@ pub fn initialize_result(
                 "resume": {},
                 "usage": {}
             },
+            "mcpCapabilities": {
+                "http": true,
+                "sse": false
+            },
             "extensions": {
                 "monitter": {
                     // The route endpoint is always available, but only
@@ -109,6 +113,8 @@ mod tests {
             true
         );
         assert_eq!(r["agentInfo"]["monitter_harness"], true);
+        assert_eq!(r["agentCapabilities"]["mcpCapabilities"]["http"], true);
+        assert_eq!(r["agentCapabilities"]["mcpCapabilities"]["sse"], false);
     }
 
     #[test]

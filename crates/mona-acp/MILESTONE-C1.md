@@ -11,6 +11,19 @@ turn after executing them:
   `ToolUse` followed by a user `ToolResult`.
 - A turn is capped at eight provider/tool rounds.
 
+## Session HTTP MCP
+
+ACP hosts may provide `mcpServers` to `session/new` or `session/resume`.
+`mona-acp` accepts only Streamable HTTP (`http` or `streamable-http`) endpoints;
+stdio and legacy SSE are rejected so a host cannot cause a local command spawn.
+The endpoint headers, negotiated MCP session ID, and discovered tools stay
+runtime-only for that ACP session. Remote tools are namespaced as
+`mcp__<server>__<tool>`, included in the same eight-round provider loop, and
+require one-time ACP permission before every remote call.
+
+HTTP setup is bounded to 20 seconds. The client uses MCP protocol `2025-03-26`
+and sends `MCP-Protocol-Version` plus the host-supplied headers on each request.
+
 The stdio transport uses one ordered request worker while the stdin reader stays
 live. This preserves `initialize` -> `session/new` -> `session/prompt` ordering
 and lets Monitter return permission responses while a prompt is awaiting them.
