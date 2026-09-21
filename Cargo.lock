@@ -3835,6 +3835,7 @@ dependencies = [
  "mona-provider-openai-runtime",
  "mona-provider-openrouter-runtime",
  "reqwest 0.12.28",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",

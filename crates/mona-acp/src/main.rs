@@ -6,6 +6,20 @@ use mona_acp::{ClassifierStartup, ServerState, classifier_from_environment};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
+/// The dependency graph currently enables both Rustls crypto backends:
+/// reqwest 0.12 selects ring while Azure's reqwest 0.13 path selects AWS-LC.
+/// Rustls cannot infer a process default in that configuration, so select the
+/// workspace's declared AWS-LC provider before any HTTP or WebSocket client is
+/// constructed.
+fn install_rustls_crypto_provider() -> Result<()> {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .map_err(|_| anyhow::anyhow!("could not install the AWS-LC Rustls crypto provider"))?;
+    }
+    Ok(())
+}
+
 /// Resolve the mona home directory.
 ///
 /// Default: `~/.mona/`. Override with `MONA_HOME` env var. Used for
@@ -22,6 +36,8 @@ fn home_dir() -> PathBuf {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    install_rustls_crypto_provider()?;
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_env("MONA_ACP_LOG")
@@ -55,4 +71,16 @@ async fn main() -> Result<()> {
     let state = ServerState::new(home.clone(), classifier);
     tracing::info!(?home, "mona-acp starting");
     mona_acp::run_acp_server(state).await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn installs_crypto_provider_before_tls_client_construction() {
+        super::install_rustls_crypto_provider().expect("install Rustls crypto provider");
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+        reqwest::Client::builder()
+            .build()
+            .expect("construct TLS client after provider installation");
+    }
 }
