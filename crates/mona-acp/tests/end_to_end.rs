@@ -7,8 +7,8 @@
 //! - `session/new` with `provider=codex` returns a valid sessionId and
 //!   defaults to `gpt-5.5` / effort `high`.
 //! - `session/list` includes the freshly created session.
-//! - `session/prompt` returns the Phase 2 stub response (no agent loop
-//!   wiring yet).
+//! - `session/prompt` reports unauthenticated cleanly when no provider
+//!   credential is configured (live provider turns remain opt-in).
 //! - `session/set_model` and `session/set_reasoning_effort` succeed for a
 //!   real session.
 //! - `session/cancel` removes the session.

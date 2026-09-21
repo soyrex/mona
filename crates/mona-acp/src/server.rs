@@ -9,27 +9,28 @@
 //! The server uses newline-delimited JSON (`\n`-terminated frames). This is
 //! what the Monitter `acp_runtime.rs` already speaks.
 //!
-//! Phase 2 scope: initialize, session/new, session/resume, session/cancel,
-//! session/list, session/set_model, session/set_reasoning_effort.
-//! `session/prompt` returns a stub response (Phase 2.5 wires the real
-//! `Agent::run_turn_with_jev` path).
+//! The server supports session lifecycle, streamed provider turns, and a
+//! bounded tool continuation loop. Mutating tools use full-duplex ACP
+//! `session/request_permission` requests; stdout remains JSON-RPC-only.
 
-use crate::auth::{Auth, AuthRegistry};
+use crate::auth::AuthRegistry;
 use crate::initialize::initialize_result;
 use crate::policy::JevRoutePolicy;
 use crate::provider_whitelist::parse_provider;
 use crate::session::{SessionInfo, SessionRegistry};
-use crate::trace::TraceTrigger;
-use crate::turn::{RouterConfig, decision_to_router_trace_value, run_turn_with_jev};
+use crate::turn::{RouterConfig, run_turn_with_jev};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use mona_jev::JevClassifier;
-use mona_message_types::{Message, StreamEvent};
+use mona_message_types::{ContentBlock, Message, Role, StreamEvent, ToolCall};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info, warn};
 
 /// Shared stdout writer for the ACP server. Handlers that stream updates
@@ -39,6 +40,7 @@ use tracing::{debug, error, info, warn};
 /// Wrapped in a boxed `AsyncWrite` trait object so tests can substitute an
 /// in-memory buffer for `Stdout`.
 pub type SharedWriter = Arc<Mutex<BufWriter<Box<dyn AsyncWrite + Send + Unpin>>>>;
+type PendingClientResponses = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
 
 /// Build the server name + version reported in `initialize`.
 pub const SERVER_NAME: &str = "mona-acp";
@@ -57,7 +59,16 @@ pub struct ServerState {
     pub auth: AuthRegistry,
     /// Per-session turn counter + swaps counter, kept here because the
     /// session registry is per-session and we'd otherwise lose the counts.
-    pub session_counters: Arc<Mutex<SessionCounters>>,
+    session_counters: Arc<Mutex<SessionCounters>>,
+    /// In-server tool registry. `read_file`, `write_file`, `bash`,
+    /// `ls` by default. Hosts can register additional tools before
+    /// launching the server.
+    pub tools: Arc<mona_acp_tools::ToolRegistry>,
+    /// Responses to server-initiated JSON-RPC requests, principally
+    /// `session/request_permission`. The stdin reader remains live while a
+    /// prompt task waits on the matching oneshot sender.
+    pending_client_responses: PendingClientResponses,
+    client_closed: Arc<AtomicBool>,
 }
 
 #[derive(Default, Clone)]
@@ -92,6 +103,9 @@ impl ServerState {
             home_dir,
             auth,
             session_counters: Arc::new(Mutex::new(SessionCounters::default())),
+            tools: Arc::new(mona_acp_tools::default_registry()),
+            pending_client_responses: Arc::new(Mutex::new(HashMap::new())),
+            client_closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -108,6 +122,18 @@ pub async fn run_acp_server(state: ServerState) -> Result<()> {
     let mut reader = BufReader::new(stdin);
     let writer: SharedWriter = Arc::new(Mutex::new(BufWriter::new(Box::new(stdout))));
     let mut buf = String::new();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<String>();
+    let worker_state = state.clone();
+    let worker_writer = writer.clone();
+    let request_worker = tokio::spawn(async move {
+        while let Some(line) = request_rx.recv().await {
+            let response = handle_frame(&line, &worker_state, worker_writer.clone()).await;
+            if let Err(error) = write_json_frame(&worker_writer, &response).await {
+                error!(%error, "failed to write ACP response");
+                break;
+            }
+        }
+    });
 
     info!("mona-acp listening on stdio");
     loop {
@@ -118,6 +144,14 @@ pub async fn run_acp_server(state: ServerState) -> Result<()> {
             .context("read from stdin")?;
         if n == 0 {
             info!("stdin closed; shutting down mona-acp");
+            drop(request_tx);
+            // Dropping outstanding response senders rejects permission waits
+            // promptly instead of leaving the ordered worker blocked.
+            state.client_closed.store(true, Ordering::Release);
+            state.pending_client_responses.lock().await.clear();
+            if let Err(error) = request_worker.await {
+                warn!(%error, "ACP request worker stopped unexpectedly");
+            }
             return Ok(());
         }
         let line = buf.trim();
@@ -125,20 +159,42 @@ pub async fn run_acp_server(state: ServerState) -> Result<()> {
             continue;
         }
 
-        let response = handle_frame(line, &state, writer.clone()).await;
-        let response_str = match serde_json::to_string(&response) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("failed to serialize response: {e}");
-                continue;
-            }
-        };
+        if let Ok(frame) = serde_json::from_str::<Value>(line)
+            && frame.get("method").is_none()
+            && frame.get("id").is_some()
         {
-            let mut w = writer.lock().await;
-            w.write_all(response_str.as_bytes()).await?;
-            w.write_all(b"\n").await?;
-            w.flush().await?;
+            if !deliver_client_response(&state.pending_client_responses, frame).await {
+                warn!("ignoring response for unknown or expired server request");
+            }
+            continue;
         }
+
+        if request_tx.send(line.to_string()).is_err() {
+            anyhow::bail!("ACP request worker is unavailable");
+        }
+    }
+}
+
+async fn write_json_frame(writer: &SharedWriter, frame: &Value) -> std::io::Result<()> {
+    let encoded = serde_json::to_vec(frame).map_err(std::io::Error::other)?;
+    let mut writer = writer.lock().await;
+    writer.write_all(&encoded).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await
+}
+
+async fn deliver_client_response(pending: &PendingClientResponses, frame: Value) -> bool {
+    let Some(id) = frame.get("id") else {
+        return false;
+    };
+    let key = id.to_string();
+    let sender = pending.lock().await.remove(&key);
+    match sender {
+        Some(sender) => {
+            let _ = sender.send(frame);
+            true
+        }
+        None => false,
     }
 }
 
@@ -178,7 +234,10 @@ pub async fn handle_frame(line: &str, state: &ServerState, writer: SharedWriter)
 }
 
 fn handle_initialize(id: Value, _params: &Value, state: &ServerState) -> Value {
-    jsonrpc_result(id, initialize_result(SERVER_NAME, SERVER_VERSION, &state.auth))
+    jsonrpc_result(
+        id,
+        initialize_result(SERVER_NAME, SERVER_VERSION, &state.auth),
+    )
 }
 
 async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> Value {
@@ -193,13 +252,11 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    let provider = match crate::provider_whitelist::parse_provider_with_default(
-        provider_str,
-        &state.auth,
-    ) {
-        Ok(p) => p,
-        Err(e) => return jsonrpc_error(id, -32602, &format!("{e}")),
-    };
+    let provider =
+        match crate::provider_whitelist::parse_provider_with_default(provider_str, &state.auth) {
+            Ok(p) => p,
+            Err(e) => return jsonrpc_error(id, -32602, &format!("{e}")),
+        };
     // Reuse the provider_str for the existing SessionRegistry call. The
     // registry also calls parse_provider; if it errors with "auto", we
     // catch that above and never reach here.
@@ -327,23 +384,23 @@ fn handle_session_auth(id: Value, params: &Value, state: &ServerState) -> Value 
 
 /// Per-turn routing hook + agent-loop driver.
 ///
-/// Milestone B: drives a real model turn through the session's
+/// Milestones B and C.1 drive a real model turn through the session's
 /// `ProviderHandle`, streams `StreamEvent`s as `session/update` push
-/// notifications, and returns the final assistant text plus token usage.
+/// notifications, execute advertised tools, and return the final assistant
+/// text plus token usage.
 ///
 /// Scope:
 /// - One user message per `session/prompt` call; no conversation history is
 ///   kept inside mona-acp yet.
-/// - No tool round-trips (the provider's `ToolDefinition` slice is empty,
-///   and `NativeToolCall` events are surfaced as `tool_call_update` so the
-///   client can render them, but mona-acp does not execute them).
+/// - Tool calls are bounded to eight provider rounds. `bash` and `write_file`
+///   require a one-time ACP permission response; scoped read tools do not.
 /// - `session/cancel` mid-stream is not yet wired; the turn runs to
 ///   completion or transport error.
 /// - OAuth refresh during a turn surfaces as `unauthenticated`.
 ///
 /// Phases 2.5 (per-turn Jev routing) and Phase 3 (auth loader) are
-/// unchanged: routing still fires, the model is still swapped when the
-/// classifier decides to, and the router trace is still emitted.
+/// unchanged: routing still fires and the router trace is emitted. Applying
+/// its model/effort choice to the live provider remains a later milestone.
 async fn handle_session_prompt(
     id: Value,
     params: &Value,
@@ -424,7 +481,8 @@ async fn handle_session_prompt(
                 &format!(
                     "session `{}` has no configured auth for provider `{}`; \
                      call session/auth or recreate the session with credentials",
-                    session_id, session.provider.as_str()
+                    session_id,
+                    session.provider.as_str()
                 ),
             );
         }
@@ -436,14 +494,40 @@ async fn handle_session_prompt(
         "session/prompt driving provider"
     );
 
+    let cwd = session
+        .working_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    if !cwd.is_dir() {
+        return jsonrpc_error(
+            id,
+            -32602,
+            &format!(
+                "session working directory does not exist: {}",
+                cwd.display()
+            ),
+        );
+    }
+    let permission = AcpPermission::new(
+        session_id.clone(),
+        writer.clone(),
+        state.pending_client_responses.clone(),
+        state.client_closed.clone(),
+    );
+
     // 3. Drive the real provider through the shared streaming loop.
     //    `drive_provider_stream` is the testable core; this handler just
     //    maps its outcome back to a JSON-RPC response.
     let outcome = match drive_provider_stream(
         &handle,
+        &state.tools,
+        &cwd,
         vec![Message::user(&text)],
         &writer,
         &session_id,
+        &permission,
     )
     .await
     {
@@ -479,18 +563,160 @@ pub(crate) struct PromptOutcome {
     pub error: Option<String>,
 }
 
+/// One permission decision the host (Monitter) must make before mona-acp
+/// invokes a tool that requires it. Mirrors ACP's request_permission
+/// shape so the existing Monitter UI keeps working.
+#[derive(Debug, Clone)]
+struct PermissionRequest {
+    pub request_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
+}
+
+/// What the host decides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PermissionDecision {
+    AllowOnce,
+    RejectOnce,
+}
+
+/// Host-side permission boundary. `drive_provider_stream` calls
+/// `request(&req)` whenever a tool whose `permission()` is `Required`
+/// is about to run. Production uses `AcpPermission`; tests provide bounded
+/// fakes for deterministic allow/deny coverage.
+trait Permission: Send + Sync {
+    fn request<'a>(
+        &'a self,
+        req: &'a PermissionRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionDecision> + Send + 'a>>;
+}
+
+#[cfg(test)]
+struct AlwaysAllow;
+
+#[cfg(test)]
+impl Permission for AlwaysAllow {
+    fn request<'a>(
+        &'a self,
+        _req: &'a PermissionRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionDecision> + Send + 'a>> {
+        Box::pin(async { PermissionDecision::AllowOnce })
+    }
+}
+
+struct AcpPermission {
+    session_id: String,
+    writer: SharedWriter,
+    pending: PendingClientResponses,
+    client_closed: Arc<AtomicBool>,
+}
+
+impl AcpPermission {
+    fn new(
+        session_id: String,
+        writer: SharedWriter,
+        pending: PendingClientResponses,
+        client_closed: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            session_id,
+            writer,
+            pending,
+            client_closed,
+        }
+    }
+}
+
+impl Permission for AcpPermission {
+    fn request<'a>(
+        &'a self,
+        request: &'a PermissionRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionDecision> + Send + 'a>> {
+        Box::pin(async move {
+            if self.client_closed.load(Ordering::Acquire) {
+                return PermissionDecision::RejectOnce;
+            }
+            let request_id = Value::String(format!("mona-permission-{}", uuid::Uuid::new_v4()));
+            let allow_option = format!("allow-once-{}", uuid::Uuid::new_v4());
+            let reject_option = format!("reject-once-{}", uuid::Uuid::new_v4());
+            let (sender, receiver) = oneshot::channel();
+            self.pending
+                .lock()
+                .await
+                .insert(request_id.to_string(), sender);
+
+            let frame = json!({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": self.session_id,
+                    "toolCall": {
+                        "toolCallId": request.request_id,
+                        "toolName": request.tool_name,
+                        "title": request.tool_name,
+                        "kind": "execute",
+                        "rawInput": request.input,
+                    },
+                    "options": [
+                        {
+                            "optionId": allow_option,
+                            "name": "Allow once",
+                            "kind": "allow_once",
+                        },
+                        {
+                            "optionId": reject_option,
+                            "name": "Reject",
+                            "kind": "reject_once",
+                        }
+                    ]
+                }
+            });
+            if write_json_frame(&self.writer, &frame).await.is_err() {
+                self.pending.lock().await.remove(&request_id.to_string());
+                return PermissionDecision::RejectOnce;
+            }
+
+            let response = match timeout(Duration::from_secs(300), receiver).await {
+                Ok(Ok(response)) => response,
+                _ => {
+                    self.pending.lock().await.remove(&request_id.to_string());
+                    return PermissionDecision::RejectOnce;
+                }
+            };
+            let outcome = &response["result"]["outcome"];
+            if outcome["outcome"] == "selected"
+                && outcome["optionId"].as_str() == Some(allow_option.as_str())
+            {
+                PermissionDecision::AllowOnce
+            } else {
+                PermissionDecision::RejectOnce
+            }
+        })
+    }
+}
+
 /// Open `Provider::complete` for the given messages and drain the stream,
 /// emitting one `session/update` push notification per relevant event.
 ///
-/// This is the testable core of `session/prompt`. It is `pub(crate)` so
-/// the unit tests in `server::tests` can drive it directly with a mock
-/// provider and an in-memory writer, without spinning up a child process
-/// or polluting stdout.
-pub(crate) async fn drive_provider_stream(
+/// This is the testable core of `session/prompt`; unit tests in this module
+/// drive it directly with a mock provider and an in-memory writer, without
+/// spinning up a child process or polluting stdout.
+///
+/// Milestone C.1: when the model emits a standard streamed tool call or a
+/// `NativeToolCall`, mona-acp asks the host for permission (if the tool
+/// requires it), runs the tool via `mona-acp-tools`, folds the result back
+/// into the messages, and re-enters `provider.complete()` for another round.
+/// The function returns once the model emits `MessageEnd` without another
+/// tool call.
+async fn drive_provider_stream(
     handle: &crate::provider::ProviderHandle,
-    messages: Vec<Message>,
+    tools: &mona_acp_tools::ToolRegistry,
+    cwd: &PathBuf,
+    mut messages: Vec<Message>,
     writer: &SharedWriter,
     session_id: &str,
+    permission: &(dyn Permission + Send + Sync),
 ) -> anyhow::Result<PromptOutcome> {
     debug!(
         session_id,
@@ -498,174 +724,331 @@ pub(crate) async fn drive_provider_stream(
         model = %handle.provider.model(),
         "drive_provider_stream opening provider.complete"
     );
-    let mut stream = handle
-        .provider
-        .complete(&messages, &[], "", None)
-        .await
-        .map_err(|e| anyhow::anyhow!("provider `{}` open failed: {e}", handle.provider.name()))?;
 
+    let tool_defs = tools.definitions();
     let mut outcome = PromptOutcome::default();
-    let mut active_tool_id: Option<String> = None;
 
-    while let Some(event) = stream.next().await {
-        match event {
-            Ok(StreamEvent::TextDelta(delta)) => {
-                outcome.text.push_str(&delta);
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({
-                        "sessionUpdate": "agent_message_chunk",
-                        "content": { "type": "text", "text": delta },
-                    }),
-                )
-                .await;
-            }
-            Ok(StreamEvent::TextDone) => {
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({ "sessionUpdate": "agent_message_done" }),
-                )
-                .await;
-            }
-            Ok(StreamEvent::ThinkingStart) => {
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({ "sessionUpdate": "agent_thought_chunk" }),
-                )
-                .await;
-            }
-            Ok(StreamEvent::ThinkingDelta(delta)) => {
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({
-                        "sessionUpdate": "agent_thought_chunk",
-                        "content": { "type": "text", "text": delta },
-                    }),
-                )
-                .await;
-            }
-            Ok(StreamEvent::ThinkingEnd) | Ok(StreamEvent::ThinkingDone { .. }) => {
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({ "sessionUpdate": "agent_thought_chunk", "phase": "end" }),
-                )
-                .await;
-            }
-            Ok(StreamEvent::ToolUseStart { id, name }) => {
-                active_tool_id = Some(id.clone());
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({
-                        "sessionUpdate": "tool_call",
-                        "toolCallId": id,
-                        "title": name,
-                        "status": "pending",
-                    }),
-                )
-                .await;
-            }
-            Ok(StreamEvent::ToolInputDelta(delta)) => {
-                let Some(tool_id) = active_tool_id.clone() else {
-                    continue;
-                };
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({
-                        "sessionUpdate": "tool_call_update",
-                        "toolCallId": tool_id,
-                        "rawInputDelta": delta,
-                    }),
-                )
-                .await;
-            }
-            Ok(StreamEvent::ToolUseEnd) => {
-                if let Some(tool_id) = active_tool_id.take() {
+    // Cap the blast radius if the model loops on a tool or repeatedly asks
+    // for an action the user denied.
+    const MAX_TOOL_ROUNDS: usize = 8;
+    for round in 0..MAX_TOOL_ROUNDS {
+        outcome.stop_reason = None;
+        let round_output_start = outcome.text.len();
+        let round_usage_start = outcome.usage;
+        let mut stream = handle
+            .provider
+            .complete(&messages, &tool_defs, "", None)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("provider `{}` open failed: {e}", handle.provider.name())
+            })?;
+
+        let mut round_text = String::new();
+        let mut current_tool: Option<ToolCall> = None;
+        let mut current_tool_input = String::new();
+        let mut round_tool_calls: Vec<ToolCall> = Vec::new();
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(StreamEvent::TextDelta(delta)) => {
+                    outcome.text.push_str(&delta);
+                    round_text.push_str(&delta);
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": { "type": "text", "text": delta },
+                        }),
+                    )
+                    .await;
+                }
+                Ok(StreamEvent::TextDone) => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({ "sessionUpdate": "agent_message_done" }),
+                    )
+                    .await;
+                }
+                Ok(StreamEvent::ThinkingStart) => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({ "sessionUpdate": "agent_thought_chunk" }),
+                    )
+                    .await;
+                }
+                Ok(StreamEvent::ThinkingDelta(delta)) => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "agent_thought_chunk",
+                            "content": { "type": "text", "text": delta },
+                        }),
+                    )
+                    .await;
+                }
+                Ok(StreamEvent::ThinkingEnd) | Ok(StreamEvent::ThinkingDone { .. }) => {
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({ "sessionUpdate": "agent_thought_chunk", "phase": "end" }),
+                    )
+                    .await;
+                }
+                Ok(StreamEvent::ToolUseStart { id, name }) => {
+                    current_tool = Some(ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: Value::Null,
+                        intent: None,
+                        thought_signature: None,
+                    });
+                    current_tool_input.clear();
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": id,
+                            "title": name,
+                            "status": "pending",
+                        }),
+                    )
+                    .await;
+                }
+                Ok(StreamEvent::ToolInputDelta(delta)) => {
+                    let Some(tool) = current_tool.as_ref() else {
+                        continue;
+                    };
+                    current_tool_input.push_str(&delta);
                     push_notification(
                         writer,
                         session_id,
                         json!({
                             "sessionUpdate": "tool_call_update",
-                            "toolCallId": tool_id,
-                            "status": "in_progress",
+                            "toolCallId": tool.id,
+                            "rawInputDelta": delta,
                         }),
                     )
                     .await;
                 }
-            }
-            Ok(StreamEvent::TokenUsage {
-                input_tokens,
-                output_tokens,
-                ..
-            }) => {
-                if let (Some(i), Some(o)) = (input_tokens, output_tokens) {
-                    outcome.usage = Some((i, o));
+                Ok(StreamEvent::ToolUseEnd) => {
+                    if let Some(mut tool) = current_tool.take() {
+                        tool.input = ToolCall::parse_streamed_input_to_object(&current_tool_input);
+                        tool.intent = ToolCall::intent_from_input(&tool.input);
+                        current_tool_input.clear();
+                        push_notification(
+                            writer,
+                            session_id,
+                            json!({
+                                "sessionUpdate": "tool_call_update",
+                                "toolCallId": tool.id,
+                                "status": "in_progress",
+                                "rawInput": tool.input,
+                            }),
+                        )
+                        .await;
+                        round_tool_calls.push(tool);
+                    }
                 }
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({
-                        "sessionUpdate": "usage_update",
-                        "inputTokens": input_tokens,
-                        "outputTokens": output_tokens,
-                    }),
-                )
-                .await;
+                Ok(StreamEvent::ToolUseSignature(signature)) => {
+                    if let Some(tool) = round_tool_calls.last_mut()
+                        && !signature.is_empty()
+                    {
+                        tool.thought_signature = Some(signature);
+                    }
+                }
+                Ok(StreamEvent::NativeToolCall {
+                    request_id,
+                    tool_name,
+                    input,
+                }) => {
+                    if current_tool
+                        .as_ref()
+                        .is_some_and(|tool| tool.id == request_id)
+                    {
+                        let mut tool = current_tool.take().expect("matching tool exists");
+                        tool.input = input;
+                        tool.intent = ToolCall::intent_from_input(&tool.input);
+                        current_tool_input.clear();
+                        round_tool_calls.push(tool);
+                    } else if !round_tool_calls.iter().any(|tool| tool.id == request_id) {
+                        push_notification(
+                            writer,
+                            session_id,
+                            json!({
+                                "sessionUpdate": "tool_call",
+                                "toolCallId": request_id,
+                                "title": tool_name,
+                                "status": "in_progress",
+                                "rawInput": input,
+                            }),
+                        )
+                        .await;
+                        round_tool_calls.push(ToolCall {
+                            id: request_id,
+                            name: tool_name,
+                            input,
+                            intent: None,
+                            thought_signature: None,
+                        });
+                    }
+                }
+                Ok(StreamEvent::TokenUsage {
+                    input_tokens,
+                    output_tokens,
+                    ..
+                }) => {
+                    if let (Some(i), Some(o)) = (input_tokens, output_tokens) {
+                        let (prior_input, prior_output) = outcome.usage.unwrap_or((0, 0));
+                        outcome.usage = Some((prior_input + i, prior_output + o));
+                    }
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "usage_update",
+                            "inputTokens": input_tokens,
+                            "outputTokens": output_tokens,
+                        }),
+                    )
+                    .await;
+                }
+                Ok(StreamEvent::MessageEnd { stop_reason }) => {
+                    outcome.stop_reason = stop_reason;
+                }
+                Ok(StreamEvent::Error {
+                    message,
+                    retry_after_secs,
+                }) => {
+                    outcome.error = Some(message.clone());
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "error",
+                            "message": message,
+                            "retryAfterSecs": retry_after_secs,
+                        }),
+                    )
+                    .await;
+                    break;
+                }
+                Ok(StreamEvent::RetryRollback { .. }) => {
+                    outcome.text.truncate(round_output_start);
+                    outcome.usage = round_usage_start;
+                    outcome.stop_reason = None;
+                    round_text.clear();
+                    current_tool = None;
+                    current_tool_input.clear();
+                    round_tool_calls.clear();
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({ "sessionUpdate": "retry_rollback" }),
+                    )
+                    .await;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    outcome.error = Some(format!("transport error: {e}"));
+                    push_notification(
+                        writer,
+                        session_id,
+                        json!({
+                            "sessionUpdate": "error",
+                            "message": format!("transport error: {e}"),
+                        }),
+                    )
+                    .await;
+                    break;
+                }
             }
-            Ok(StreamEvent::MessageEnd { stop_reason }) => {
-                outcome.stop_reason = stop_reason;
-            }
-            Ok(StreamEvent::Error { message, retry_after_secs }) => {
-                outcome.error = Some(message.clone());
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({
-                        "sessionUpdate": "error",
-                        "message": message,
-                        "retryAfterSecs": retry_after_secs,
-                    }),
-                )
-                .await;
-                break;
-            }
-            Ok(StreamEvent::RetryRollback { .. }) => {
-                // The provider is about to retry from the top of the same
-                // request; discard any partial output we accumulated.
-                outcome.text.clear();
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({ "sessionUpdate": "retry_rollback" }),
-                )
-                .await;
-            }
-            Ok(_) => {
-                // Other event kinds (tool results, generated images,
-                // compaction, session id, status detail, ...) are
-                // intentionally not surfaced here. Monitter can read them
-                // off `ProviderEvent` later if we extend the wire; for
-                // Milestone B we keep the notification surface minimal.
-            }
-            Err(e) => {
-                outcome.error = Some(format!("transport error: {e}"));
-                push_notification(
-                    writer,
-                    session_id,
-                    json!({
-                        "sessionUpdate": "error",
-                        "message": format!("transport error: {e}"),
-                    }),
-                )
-                .await;
-                break;
-            }
+        }
+
+        if outcome.error.is_some() || round_tool_calls.is_empty() {
+            break;
+        }
+        let mut assistant_blocks = Vec::new();
+        if !round_text.is_empty() {
+            assistant_blocks.push(ContentBlock::Text {
+                text: round_text,
+                cache_control: None,
+            });
+        }
+        assistant_blocks.extend(round_tool_calls.iter().map(ToolCall::to_tool_use_block));
+        messages.push(Message {
+            role: Role::Assistant,
+            content: assistant_blocks,
+            timestamp: Some(chrono::Utc::now()),
+            tool_duration_ms: None,
+        });
+
+        let mut tool_result_blocks = Vec::with_capacity(round_tool_calls.len());
+        for tool_call in round_tool_calls {
+            let tool = tools.get(&tool_call.name);
+            let run_result = match tool {
+                Some(tool) => {
+                    let decision =
+                        if matches!(tool.permission(), mona_acp_tools::Permission::Required) {
+                            permission
+                                .request(&PermissionRequest {
+                                    request_id: tool_call.id.clone(),
+                                    tool_name: tool_call.name.clone(),
+                                    input: tool_call.input.clone(),
+                                })
+                                .await
+                        } else {
+                            PermissionDecision::AllowOnce
+                        };
+                    match decision {
+                        PermissionDecision::AllowOnce => {
+                            tool.run(tool_call.input.clone(), cwd).await
+                        }
+                        PermissionDecision::RejectOnce => {
+                            Err(mona_acp_tools::ToolError::PermissionDenied)
+                        }
+                    }
+                }
+                None => Err(mona_acp_tools::ToolError::Unknown(tool_call.name.clone())),
+            };
+            let (output_value, is_error) = match &run_result {
+                Ok(output) => (output.output.clone(), output.is_error),
+                Err(error) => (json!({"error": error.to_string()}), true),
+            };
+            push_notification(
+                writer,
+                session_id,
+                json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": tool_call.id,
+                    "status": if is_error { "failed" } else { "completed" },
+                    "rawOutput": output_value,
+                }),
+            )
+            .await;
+            let output_text =
+                serde_json::to_string(&output_value).unwrap_or_else(|_| output_value.to_string());
+            tool_result_blocks.push(ContentBlock::ToolResult {
+                tool_use_id: tool_call.id,
+                content: output_text,
+                is_error: is_error.then_some(true),
+            });
+        }
+        // Parallel tool calls must be answered by contiguous ToolResult
+        // blocks in the very next user message (an Anthropic wire contract).
+        messages.push(Message {
+            role: Role::User,
+            content: tool_result_blocks,
+            timestamp: Some(chrono::Utc::now()),
+            tool_duration_ms: None,
+        });
+        if round + 1 == MAX_TOOL_ROUNDS {
+            return Err(anyhow::anyhow!(
+                "tool round limit ({MAX_TOOL_ROUNDS}) reached"
+            ));
         }
     }
 
@@ -724,7 +1107,9 @@ fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> V
 
     // Phase 2: validate the requested model against the session's provider
     // whitelist. Phase 2.5 will route through `set_model_with_auth_refresh`.
-    if parse_provider(new_model).is_err() && !is_model_under_provider(&new_model, session.provider.as_str()) {
+    if parse_provider(new_model).is_err()
+        && !is_model_under_provider(&new_model, session.provider.as_str())
+    {
         return jsonrpc_error(
             id,
             -32602,
@@ -780,7 +1165,12 @@ fn is_model_under_provider(model: &str, provider: &str) -> bool {
     let m = model.to_ascii_lowercase();
     match provider {
         "codex" => m.starts_with("gpt-") || m.starts_with("o") || m.starts_with("codex"),
-        "claude" => m.starts_with("claude") || m.contains("sonnet") || m.contains("opus") || m.contains("haiku"),
+        "claude" => {
+            m.starts_with("claude")
+                || m.contains("sonnet")
+                || m.contains("opus")
+                || m.contains("haiku")
+        }
         "minimax" => m.starts_with("minimax") || m.starts_with("abab"),
         _ => false,
     }
@@ -836,6 +1226,7 @@ mod tests {
     use futures::stream;
     use mona_message_types::{Message, StreamEvent, ToolDefinition};
     use mona_provider_core::{EventStream, Provider};
+    use std::collections::VecDeque;
     use std::pin::Pin;
     use std::sync::Mutex as StdMutex;
     use tokio::sync::Mutex as AsyncMutex;
@@ -846,21 +1237,32 @@ mod tests {
     /// `drive_provider_stream` accumulates text, pushes the right
     /// `session/update` notifications, and surfaces provider errors.
     struct MockProvider {
-        // std::sync::Mutex so we can `take()` the script without holding
-        // an async guard across an `await`. We rebuild the stream inline.
-        events: StdMutex<Option<Vec<Result<StreamEvent>>>>,
+        // std::sync::Mutex so we can pop a script without holding an async
+        // guard across an `await`. One script is consumed per completion
+        // round, which lets tests exercise tool-result continuations.
+        events: StdMutex<VecDeque<Vec<Result<StreamEvent>>>>,
+        calls: StdMutex<Vec<Vec<Message>>>,
+        tool_names: StdMutex<Vec<Vec<String>>>,
         model: String,
     }
 
     impl MockProvider {
         fn new(model: &str) -> Self {
             Self {
-                events: StdMutex::new(None),
+                events: StdMutex::new(VecDeque::new()),
+                calls: StdMutex::new(Vec::new()),
+                tool_names: StdMutex::new(Vec::new()),
                 model: model.to_string(),
             }
         }
         fn script(&self, events: Vec<Result<StreamEvent>>) {
-            *self.events.lock().unwrap() = Some(events);
+            self.events.lock().unwrap().push_back(events);
+        }
+        fn calls(&self) -> Vec<Vec<Message>> {
+            self.calls.lock().unwrap().clone()
+        }
+        fn tool_names(&self) -> Vec<Vec<String>> {
+            self.tool_names.lock().unwrap().clone()
         }
     }
 
@@ -868,12 +1270,17 @@ mod tests {
     impl Provider for MockProvider {
         async fn complete(
             &self,
-            _messages: &[Message],
-            _tools: &[ToolDefinition],
+            messages: &[Message],
+            tools: &[ToolDefinition],
             _system: &str,
             _resume_session_id: Option<&str>,
         ) -> Result<EventStream> {
-            let events = self.events.lock().unwrap().take().unwrap_or_default();
+            self.calls.lock().unwrap().push(messages.to_vec());
+            self.tool_names
+                .lock()
+                .unwrap()
+                .push(tools.iter().map(|tool| tool.name.clone()).collect());
+            let events = self.events.lock().unwrap().pop_front().unwrap_or_default();
             let s: Pin<Box<dyn futures::Stream<Item = Result<StreamEvent>> + Send>> =
                 Box::pin(stream::iter(events));
             Ok(s)
@@ -893,9 +1300,10 @@ mod tests {
 
     fn shared_writer() -> (SharedWriter, Arc<AsyncMutex<Vec<u8>>>) {
         let buf = Arc::new(AsyncMutex::new(Vec::new()));
-        let writer: SharedWriter = Arc::new(AsyncMutex::new(BufWriter::new(Box::new(
-            InMemoryWriter { inner: buf.clone() },
-        ))));
+        let writer: SharedWriter =
+            Arc::new(AsyncMutex::new(BufWriter::new(Box::new(InMemoryWriter {
+                inner: buf.clone(),
+            }))));
         (writer, buf)
     }
 
@@ -915,9 +1323,7 @@ mod tests {
             let me = self.get_mut();
             let inner = me.inner.clone();
             // Tests don't interleave writers so try_lock always succeeds.
-            let mut guard = inner
-                .try_lock()
-                .expect("writer lock contended in test");
+            let mut guard = inner.try_lock().expect("writer lock contended in test");
             guard.extend_from_slice(buf);
             std::task::Poll::Ready(Ok(buf.len()))
         }
@@ -973,10 +1379,17 @@ mod tests {
         ]);
 
         let (writer, buf) = shared_writer();
-        let outcome =
-            drive_provider_stream(&handle, vec![Message::user("hi")], &writer, "sess-1")
-                .await
-                .expect("stream ok");
+        let outcome = drive_provider_stream(
+            &handle,
+            &mona_acp_tools::default_registry(),
+            &PathBuf::from("/tmp"),
+            vec![Message::user("hi")],
+            &writer,
+            "sess-1",
+            &AlwaysAllow,
+        )
+        .await
+        .expect("stream ok");
 
         assert_eq!(outcome.text, "hello mona");
         assert_eq!(outcome.stop_reason.as_deref(), Some("end_turn"));
@@ -989,7 +1402,11 @@ mod tests {
         assert_eq!(lines.len(), 4);
         let kinds: Vec<&str> = lines
             .iter()
-            .map(|l| l["params"]["update"]["sessionUpdate"].as_str().unwrap_or(""))
+            .map(|l| {
+                l["params"]["update"]["sessionUpdate"]
+                    .as_str()
+                    .unwrap_or("")
+            })
             .collect();
         assert_eq!(
             kinds,
@@ -1014,9 +1431,17 @@ mod tests {
         ]);
 
         let (writer, buf) = shared_writer();
-        let err = drive_provider_stream(&handle, vec![Message::user("hi")], &writer, "sess-1")
-            .await
-            .expect_err("stream should error");
+        let err = drive_provider_stream(
+            &handle,
+            &mona_acp_tools::default_registry(),
+            &PathBuf::from("/tmp"),
+            vec![Message::user("hi")],
+            &writer,
+            "sess-1",
+            &AlwaysAllow,
+        )
+        .await
+        .expect_err("stream should error");
 
         assert!(err.to_string().contains("rate limited"));
 
@@ -1038,21 +1463,31 @@ mod tests {
                 id: "call-1".into(),
                 name: "bash".into(),
             }),
-            Ok(StreamEvent::ToolInputDelta("{\"cmd\":\"ls\"}".into())),
+            Ok(StreamEvent::ToolInputDelta("{\"command\":\"pwd\"}".into())),
             Ok(StreamEvent::ToolUseEnd),
             Ok(StreamEvent::MessageEnd {
                 stop_reason: Some("tool_use".into()),
             }),
         ]);
+        provider.script(vec![Ok(StreamEvent::MessageEnd {
+            stop_reason: Some("end_turn".into()),
+        })]);
 
         let (writer, buf) = shared_writer();
-        let outcome =
-            drive_provider_stream(&handle, vec![Message::user("list files")], &writer, "sess-1")
-                .await
-                .expect("stream ok");
+        let outcome = drive_provider_stream(
+            &handle,
+            &mona_acp_tools::default_registry(),
+            &PathBuf::from("/tmp"),
+            vec![Message::user("list files")],
+            &writer,
+            "sess-1",
+            &AlwaysAllow,
+        )
+        .await
+        .expect("stream ok");
 
         assert_eq!(outcome.text, "");
-        assert_eq!(outcome.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(outcome.stop_reason.as_deref(), Some("end_turn"));
 
         let lines = read_lines(buf).await;
         let kinds: Vec<&str> = lines
@@ -1072,13 +1507,15 @@ mod tests {
                 "tool_call",
                 "tool_call_update",
                 "tool_call_update",
+                "tool_call_update",
             ]
         );
         assert_eq!(
             lines[4]["params"]["update"]["rawInputDelta"],
-            "{\"cmd\":\"ls\"}"
+            "{\"command\":\"pwd\"}"
         );
         assert_eq!(lines[5]["params"]["update"]["status"], "in_progress");
+        assert_eq!(lines[6]["params"]["update"]["status"], "completed");
     }
 
     #[tokio::test]
@@ -1087,14 +1524,349 @@ mod tests {
         provider.script(vec![]);
 
         let (writer, _buf) = shared_writer();
-        let outcome =
-            drive_provider_stream(&handle, vec![Message::user("hi")], &writer, "sess-1")
-                .await
-                .expect("empty stream is ok");
+        let outcome = drive_provider_stream(
+            &handle,
+            &mona_acp_tools::default_registry(),
+            &PathBuf::from("/tmp"),
+            vec![Message::user("hi")],
+            &writer,
+            "sess-1",
+            &AlwaysAllow,
+        )
+        .await
+        .expect("empty stream is ok");
 
         assert_eq!(outcome.text, "");
         assert!(outcome.stop_reason.is_none());
         assert!(outcome.usage.is_none());
         assert!(outcome.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn acp_permission_round_trip_offers_only_one_time_choices() {
+        let (writer, buf) = shared_writer();
+        let pending: PendingClientResponses = Arc::new(AsyncMutex::new(HashMap::new()));
+        let permission = Arc::new(AcpPermission::new(
+            "session-1".into(),
+            writer,
+            pending.clone(),
+            Arc::new(AtomicBool::new(false)),
+        ));
+        let request_task = {
+            let permission = permission.clone();
+            tokio::spawn(async move {
+                let request = PermissionRequest {
+                    request_id: "tool-1".into(),
+                    tool_name: "bash".into(),
+                    input: json!({"command":"pwd"}),
+                };
+                permission.request(&request).await
+            })
+        };
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if !buf.lock().await.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("permission request frame");
+
+        let frames = read_lines(buf.clone()).await;
+        assert_eq!(frames.len(), 1);
+        let request = &frames[0];
+        assert_eq!(request["method"], "session/request_permission");
+        assert_eq!(request["params"]["sessionId"], "session-1");
+        assert_eq!(request["params"]["toolCall"]["toolName"], "bash");
+        let options = request["params"]["options"].as_array().unwrap();
+        assert_eq!(options.len(), 2);
+        assert!(options.iter().any(|option| option["kind"] == "allow_once"));
+        assert!(options.iter().any(|option| option["kind"] == "reject_once"));
+        assert!(
+            !options
+                .iter()
+                .any(|option| option["kind"] == "allow_always")
+        );
+        let allow_id = options
+            .iter()
+            .find(|option| option["kind"] == "allow_once")
+            .unwrap()["optionId"]
+            .clone();
+        assert!(
+            deliver_client_response(
+                &pending,
+                json!({
+                    "jsonrpc":"2.0",
+                    "id": request["id"],
+                    "result": {
+                        "outcome": {"outcome":"selected", "optionId":allow_id}
+                    }
+                }),
+            )
+            .await
+        );
+        assert_eq!(request_task.await.unwrap(), PermissionDecision::AllowOnce);
+        assert!(pending.lock().await.is_empty());
+
+        let reject_task = {
+            let permission = permission.clone();
+            tokio::spawn(async move {
+                let request = PermissionRequest {
+                    request_id: "tool-2".into(),
+                    tool_name: "write_file".into(),
+                    input: json!({"path":"example.txt","content":"no"}),
+                };
+                permission.request(&request).await
+            })
+        };
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if read_lines(buf.clone()).await.len() == 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("second permission request frame");
+        let frames = read_lines(buf).await;
+        let request = &frames[1];
+        let reject_id = request["params"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["kind"] == "reject_once")
+            .unwrap()["optionId"]
+            .clone();
+        assert!(
+            deliver_client_response(
+                &pending,
+                json!({
+                    "jsonrpc":"2.0",
+                    "id": request["id"],
+                    "result": {
+                        "outcome": {"outcome":"selected", "optionId":reject_id}
+                    }
+                }),
+            )
+            .await
+        );
+        assert_eq!(reject_task.await.unwrap(), PermissionDecision::RejectOnce);
+        assert!(pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tool_round_trip_preserves_call_and_result_history() {
+        let (provider, handle) = mock_handle("gpt-5.5");
+        provider.script(vec![
+            Ok(StreamEvent::ToolUseStart {
+                id: "call-1".into(),
+                name: "read_file".into(),
+            }),
+            Ok(StreamEvent::ToolInputDelta(
+                "{\"path\":\"hello.txt\"}".into(),
+            )),
+            Ok(StreamEvent::ToolUseEnd),
+            Ok(StreamEvent::ToolUseStart {
+                id: "call-2".into(),
+                name: "read_file".into(),
+            }),
+            Ok(StreamEvent::ToolInputDelta(
+                "{\"path\":\"second.txt\"}".into(),
+            )),
+            Ok(StreamEvent::ToolUseEnd),
+            Ok(StreamEvent::MessageEnd {
+                stop_reason: Some("tool_use".into()),
+            }),
+        ]);
+        provider.script(vec![
+            Ok(StreamEvent::TextDelta("The file says world.".into())),
+            Ok(StreamEvent::TextDone),
+            Ok(StreamEvent::MessageEnd {
+                stop_reason: Some("end_turn".into()),
+            }),
+        ]);
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("hello.txt"), "world").unwrap();
+        std::fs::write(temp.path().join("second.txt"), "again").unwrap();
+        let (writer, buf) = shared_writer();
+        let outcome = drive_provider_stream(
+            &handle,
+            &mona_acp_tools::default_registry(),
+            &temp.path().to_path_buf(),
+            vec![Message::user("read hello.txt")],
+            &writer,
+            "session-1",
+            &AlwaysAllow,
+        )
+        .await
+        .expect("tool continuation succeeds");
+
+        assert_eq!(outcome.text, "The file says world.");
+        assert_eq!(outcome.stop_reason.as_deref(), Some("end_turn"));
+        let calls = provider.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].len(), 3);
+        assert_eq!(calls[1][1].role, Role::Assistant);
+        match &calls[1][1].content[0] {
+            ContentBlock::ToolUse {
+                id, name, input, ..
+            } => {
+                assert_eq!(id, "call-1");
+                assert_eq!(name, "read_file");
+                assert_eq!(input["path"], "hello.txt");
+            }
+            other => panic!("expected assistant ToolUse, got {other:?}"),
+        }
+        assert_eq!(calls[1][1].content.len(), 2);
+        assert_eq!(calls[1][2].role, Role::User);
+        match &calls[1][2].content[0] {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                assert_eq!(tool_use_id, "call-1");
+                assert!(content.contains("world"));
+                assert_ne!(*is_error, Some(true));
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+        assert_eq!(calls[1][2].content.len(), 2);
+        match &calls[1][2].content[1] {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                assert_eq!(tool_use_id, "call-2");
+                assert!(content.contains("again"));
+                assert_ne!(*is_error, Some(true));
+            }
+            other => panic!("expected parallel ToolResult, got {other:?}"),
+        }
+        assert_eq!(provider.tool_names().len(), 2);
+        assert!(
+            provider.tool_names()[0]
+                .iter()
+                .any(|name| name == "read_file")
+        );
+        let frames = read_lines(buf).await;
+        let completed = frames
+            .iter()
+            .find(|frame| {
+                frame["params"]["update"]["sessionUpdate"] == "tool_call_update"
+                    && frame["params"]["update"]["status"] == "completed"
+            })
+            .expect("completed tool update");
+        assert_eq!(
+            completed["params"]["update"]["rawOutput"]["content"],
+            "world"
+        );
+    }
+
+    struct RejectAll;
+
+    impl Permission for RejectAll {
+        fn request<'a>(
+            &'a self,
+            _request: &'a PermissionRequest,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionDecision> + Send + 'a>>
+        {
+            Box::pin(async { PermissionDecision::RejectOnce })
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_tool_is_not_executed_and_model_receives_error_result() {
+        let (provider, handle) = mock_handle("gpt-5.5");
+        provider.script(vec![
+            Ok(StreamEvent::ToolUseStart {
+                id: "call-denied".into(),
+                name: "bash".into(),
+            }),
+            Ok(StreamEvent::ToolInputDelta(
+                "{\"command\":\"touch should-not-exist\"}".into(),
+            )),
+            Ok(StreamEvent::ToolUseEnd),
+            Ok(StreamEvent::MessageEnd {
+                stop_reason: Some("tool_use".into()),
+            }),
+        ]);
+        provider.script(vec![
+            Ok(StreamEvent::TextDelta("The command was denied.".into())),
+            Ok(StreamEvent::MessageEnd {
+                stop_reason: Some("end_turn".into()),
+            }),
+        ]);
+        let temp = tempfile::TempDir::new().unwrap();
+        let (writer, buf) = shared_writer();
+        let outcome = drive_provider_stream(
+            &handle,
+            &mona_acp_tools::default_registry(),
+            &temp.path().to_path_buf(),
+            vec![Message::user("create a file")],
+            &writer,
+            "session-1",
+            &RejectAll,
+        )
+        .await
+        .expect("denial is returned to the model");
+
+        assert_eq!(outcome.text, "The command was denied.");
+        assert!(!temp.path().join("should-not-exist").exists());
+        let calls = provider.calls();
+        match &calls[1][2].content[0] {
+            ContentBlock::ToolResult {
+                content, is_error, ..
+            } => {
+                assert!(content.contains("permission denied"));
+                assert_eq!(*is_error, Some(true));
+            }
+            other => panic!("expected denied ToolResult, got {other:?}"),
+        }
+        let frames = read_lines(buf).await;
+        assert!(frames.iter().any(|frame| {
+            frame["params"]["update"]["status"] == "failed"
+                && frame["params"]["update"]["rawOutput"]["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("permission denied"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn tool_loop_stops_after_eight_rounds() {
+        let (provider, handle) = mock_handle("gpt-5.5");
+        for index in 0..8 {
+            provider.script(vec![
+                Ok(StreamEvent::ToolUseStart {
+                    id: format!("call-{index}"),
+                    name: "ls".into(),
+                }),
+                Ok(StreamEvent::ToolInputDelta("{}".into())),
+                Ok(StreamEvent::ToolUseEnd),
+                Ok(StreamEvent::MessageEnd {
+                    stop_reason: Some("tool_use".into()),
+                }),
+            ]);
+        }
+        let temp = tempfile::TempDir::new().unwrap();
+        let (writer, _buf) = shared_writer();
+        let error = drive_provider_stream(
+            &handle,
+            &mona_acp_tools::default_registry(),
+            &temp.path().to_path_buf(),
+            vec![Message::user("keep listing")],
+            &writer,
+            "session-1",
+            &AlwaysAllow,
+        )
+        .await
+        .expect_err("tool loop must be bounded");
+        assert!(error.to_string().contains("tool round limit (8)"));
+        assert_eq!(provider.calls().len(), 8);
     }
 }

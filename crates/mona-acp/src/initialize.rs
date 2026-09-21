@@ -127,4 +127,3 @@ mod tests {
         assert_eq!(configured, vec!["codex"]);
     }
 }
-

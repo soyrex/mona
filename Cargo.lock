@@ -3825,6 +3825,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "mona-acp-tools",
  "mona-base",
  "mona-jev",
  "mona-message-types",
@@ -3834,11 +3835,25 @@ dependencies = [
  "mona-provider-openrouter-runtime",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "mona-acp-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mona-message-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

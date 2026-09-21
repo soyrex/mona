@@ -6,12 +6,11 @@
 //! in upstream already speaks, so any existing Monitter ACP client can
 //! drive `mona-acp` without code changes.
 //!
-//! Phase 2 status: server loop, capability negotiation, provider whitelist,
-//! and session lifecycle are real. `session/prompt` returns a stub response
-//! acknowledging the prompt but does not yet drive a real agent loop.
-//! The full `Agent::run_turn_with_jev` integration lands in Phase 2.5.
-//!
-//! See `docs/PHASE-2-MONA-ACP.md` for the full plan and Phase 2.5 scope.
+//! Current status: provider construction and streamed model turns are real.
+//! Milestone C.1 adds a bounded in-server tool loop with ACP one-time
+//! permissions for mutating tools. Durable history, mid-turn cancellation,
+//! and applying Jev model/effort choices to the live provider remain later
+//! milestones.
 
 #![forbid(unsafe_code)]
 

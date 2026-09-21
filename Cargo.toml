@@ -41,6 +41,7 @@ members = [
     "crates/mona-selfdev-types",
     "crates/mona-jev",
     "crates/mona-acp",
+    "crates/mona-acp-tools",
     "crates/mona-session-types",
     "crates/mona-setup-hints",
     "crates/mona-storage",

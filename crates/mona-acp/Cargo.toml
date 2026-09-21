@@ -18,6 +18,7 @@ mona-base = { path = "../mona-base", default-features = false }
 mona-provider-openai-runtime = { path = "../mona-provider-openai-runtime" }
 mona-provider-anthropic-runtime = { path = "../mona-provider-anthropic-runtime" }
 mona-provider-openrouter-runtime = { path = "../mona-provider-openrouter-runtime" }
+mona-acp-tools = { path = "../mona-acp-tools" }
 mona-jev = { path = "../mona-jev" }
 mona-message-types = { path = "../mona-message-types" }
 mona-provider-core = { path = "../mona-provider-core" }
@@ -32,3 +33,6 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"

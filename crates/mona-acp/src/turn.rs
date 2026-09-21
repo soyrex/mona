@@ -15,10 +15,10 @@
 //! 5. Persist a [`RouterTrace`] JSON to `~/.mona/router-traces/`.
 //! 6. Return `(verdict, plan, trace_id, updated_session)` to the caller.
 //!
-//! Phase 2.5 deliberately stops short of driving `Agent::run_once`. The
-//! caller (`session/prompt`) still returns a stub response after the hook
-//! fires, but the routing infrastructure is real and tested end-to-end.
-//! Phase 3 wires the stub to the actual `Agent` loop.
+//! The caller now drives a real provider and bounded tool loop after this
+//! hook. Applying the selected concrete model and effort to that live
+//! provider remains a later milestone; this module currently owns the
+//! classification, safety decision, session metadata, and trace.
 
 use crate::session::Session;
 use crate::trace::RouterTrace;
