@@ -31,6 +31,48 @@ impl std::fmt::Debug for ProviderHandle {
     }
 }
 
+impl ProviderHandle {
+    /// Construct a replacement runtime from this handle's authenticated
+    /// identity. The original handle is never modified: callers can swap this
+    /// return value into a session only after all validation succeeds.
+    pub fn reconfigure(&self, model: &str, effort: &str) -> Result<Self> {
+        ensure!(
+            self.auth.is_some(),
+            "cannot reconfigure an unauthenticated provider"
+        );
+        validate_model_for_provider(self.provider_kind, model)?;
+        let model = model.trim();
+        let effort = effort.trim().to_ascii_lowercase();
+        ensure!(!effort.is_empty(), "reasoning effort must not be empty");
+
+        // `fork` is an independently mutable provider runtime. All fallible
+        // work is deliberately performed against it, leaving the live handle
+        // untouched until this method has returned successfully.
+        let candidate = self.provider.fork();
+        candidate.set_model(model)?;
+
+        let available_efforts = candidate.available_efforts();
+        if available_efforts.is_empty() {
+            ensure!(
+                matches!(effort.as_str(), "none" | "off" | "default"),
+                "reasoning effort '{effort}' is unsupported by model '{model}'"
+            );
+            ensure!(
+                candidate.reasoning_effort().is_none(),
+                "provider retained reasoning effort for unsupported model '{model}'"
+            );
+        } else {
+            candidate.set_reasoning_effort(&effort)?;
+        }
+
+        Ok(Self {
+            provider: candidate,
+            auth: self.auth.clone(),
+            provider_kind: self.provider_kind,
+        })
+    }
+}
+
 pub fn build_provider_for_session(
     provider_str: &str,
     auth_registry: &AuthRegistry,
@@ -124,6 +166,38 @@ pub(crate) fn build_provider_with_model(
         auth,
         provider_kind: kind,
     })
+}
+
+/// Keep model routing pinned to the session's authenticated provider. The ACP
+/// whitelist intentionally has a small provider vocabulary, but model IDs may
+/// evolve independently, so validate stable provider-family prefixes rather
+/// than a frozen per-model allowlist.
+fn validate_model_for_provider(kind: SupportedProvider, model: &str) -> Result<()> {
+    let model = model.trim();
+    ensure!(!model.is_empty(), "model must not be empty");
+    ensure!(
+        !model.eq_ignore_ascii_case("auto") && !model.contains(':'),
+        "model must be a concrete model id"
+    );
+    let normalized = model.to_ascii_lowercase();
+    let compatible = match kind {
+        SupportedProvider::Codex => {
+            normalized.starts_with("gpt-")
+                || normalized.starts_with("o1")
+                || normalized.starts_with("o3")
+                || normalized.starts_with("o4")
+                || normalized.starts_with("o5")
+                || normalized.starts_with("codex")
+        }
+        SupportedProvider::Claude => normalized.starts_with("claude-"),
+        SupportedProvider::Minimax => normalized.starts_with("minimax-"),
+    };
+    ensure!(
+        compatible,
+        "model '{model}' is incompatible with {}",
+        kind.as_str()
+    );
+    Ok(())
 }
 
 /// Missing auth preserves session/list/cancel behavior, but never pretends to

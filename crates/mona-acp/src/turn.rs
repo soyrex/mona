@@ -10,22 +10,23 @@
 //! 3. Apply [`safety::check_safety`] with the session's current
 //!    permission_tier. Hard gates (sensitive, cooldown, low confidence)
 //!    refuse; soft gate (permission widening) downgrades.
-//! 4. If the verdict is `Apply` or `Modified`, update the session's model
-//!    + effort. Record the cooldown counter.
-//! 5. Persist a [`RouterTrace`] JSON to `~/.mona/router-traces/`.
-//! 6. Return `(verdict, plan, trace_id, updated_session)` to the caller.
+//! 4. Resolve the abstract tier to a concrete model within the session's
+//!    existing provider.
+//! 5. Return a pending decision to the caller. The caller applies it to an
+//!    atomic provider candidate, then calls [`finalize_routing_decision`] to
+//!    record the actual outcome and persist the trace.
 //!
 //! The caller now drives a real provider and bounded tool loop after this
-//! hook. Applying the selected concrete model and effort to that live
-//! provider remains a later milestone; this module currently owns the
-//! classification, safety decision, session metadata, and trace.
+//! hook. C.2 deliberately separates safety approval from runtime application
+//! so a provider rejection cannot leave session metadata or traces claiming a
+//! model switch that did not happen.
 
 use crate::session::Session;
 use crate::trace::RouterTrace;
 use anyhow::Result;
 use mona_jev::{
-    JevClassifyRequest, JevClassifier, JevRoutePlan, JevTurnOutcome, ModelTier,
-    PermissionTier, SafetyVerdict, check_safety, safety::SafetyConfig,
+    JevClassifier, JevClassifyRequest, JevRoutePlan, JevTurnOutcome, ModelTier, PermissionTier,
+    SafetyVerdict, check_safety, safety::SafetyConfig,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -58,15 +59,22 @@ impl Default for RouterConfig {
 #[derive(Debug, Clone)]
 pub struct TurnRoutingDecision {
     pub verdict: SafetyVerdict,
-    /// The plan that was applied (or attempted). `None` if the verdict was
-    /// `Refuse` and we kept the current model.
+    /// The safety-approved plan awaiting live provider application. `None` if
+    /// the verdict was `Refuse` and the current runtime must be kept.
     pub applied_plan: Option<JevRoutePlan>,
-    /// The trace that was persisted.
+    /// Trace draft. The caller finalizes and persists it after attempting the
+    /// live runtime change.
     pub trace: RouterTrace,
-    /// The new session model after the decision.
+    /// The actual session model after finalization. Before finalization this
+    /// remains the current model.
     pub new_model: String,
-    /// The new session effort after the decision.
+    /// The actual session effort after finalization. Before finalization this
+    /// remains the current effort.
     pub new_effort: String,
+    /// Concrete provider-scoped configuration requested by Jev. These remain
+    /// visible even when safety refuses or runtime application rolls back.
+    pub requested_model: Option<String>,
+    pub requested_effort: Option<String>,
     /// The new session tier after the decision.
     pub new_tier: Option<ModelTier>,
     /// Human-readable reason for the verdict (for ACP errors + logs).
@@ -80,22 +88,16 @@ pub struct TurnRoutingDecision {
 /// Outcome of running the per-turn hook.
 pub async fn run_turn_with_jev(
     classifier: Arc<dyn JevClassifier>,
-    session: &mut Session,
+    session: &Session,
     user_message: &str,
     turn_count: u32,
     swaps_in_session: u32,
     last_turn_outcome: Option<JevTurnOutcome>,
     config: &RouterConfig,
-    home_dir: &std::path::Path,
+    _home_dir: &std::path::Path,
 ) -> Result<TurnRoutingDecision> {
     // 1. Build the classify request
-    let req = JevClassifyRequest {
-        prompt: user_message.to_string(),
-        recent_messages: vec![], // populated in Phase 3 when we wire to Agent state
-        last_turn_outcome,
-        available_models: vec![session.provider.default_model().to_string()],
-        available_efforts: vec!["none".into(), "low".into(), "medium".into(), "high".into(), "max".into()],
-    };
+    let req = build_request_from_session(user_message, session, last_turn_outcome);
 
     // 2. Classify
     let plan = match classifier.classify(&req).await {
@@ -110,7 +112,10 @@ pub async fn run_turn_with_jev(
                 trigger: crate::trace::TraceTrigger::ClassifierUnavailable,
                 proposed_tier: None,
                 proposed_effort: None,
+                requested_model: None,
+                requested_effort: None,
                 applied: false,
+                application_error: None,
                 confidence: 0.0,
                 rationale: format!("classifier error: {e}"),
                 old_model: session.model.clone(),
@@ -118,13 +123,14 @@ pub async fn run_turn_with_jev(
                 old_effort: session.effort.clone(),
                 new_effort: session.effort.clone(),
             };
-            crate::trace::persist(home_dir, &trace).await?;
             return Ok(TurnRoutingDecision {
                 verdict: SafetyVerdict::Refuse,
                 applied_plan: None,
                 trace,
                 new_model: session.model.clone(),
                 new_effort: session.effort.clone(),
+                requested_model: None,
+                requested_effort: None,
                 new_tier: None,
                 reason: format!("classifier error: {e}"),
                 sensitive: false, // unknown — classifier never returned a plan
@@ -133,46 +139,51 @@ pub async fn run_turn_with_jev(
     };
 
     // 3. Apply safety gates
-    let cooldown_active = (turn_count > 0)
-        && ((turn_count % config.min_turns_between_swaps.max(1)) != 0);
+    let cooldown_active =
+        (turn_count > 0) && ((turn_count % config.min_turns_between_swaps.max(1)) != 0);
     let safety_config = SafetyConfig {
         confidence_floor: config.confidence_floor,
         max_permission_tier_widening: PermissionTier::Read, // never widen
     };
-    let (verdict, modified_plan) = check_safety(
+    let (mut verdict, modified_plan) = check_safety(
         &plan,
         &safety_config,
         PermissionTier::WriteLocal,
         cooldown_active,
     );
+    let requested_plan = modified_plan.as_ref().unwrap_or(&plan);
+    let requested_model = session
+        .provider
+        .model_for_tier(requested_plan.tier)
+        .to_string();
+    let requested_effort = requested_plan
+        .effort
+        .clone()
+        .unwrap_or_else(|| session.effort.clone());
+    let swap_budget_exhausted = swaps_in_session >= config.max_swaps_per_session
+        && (requested_model != session.model || requested_effort != session.effort);
+    if swap_budget_exhausted {
+        verdict = SafetyVerdict::Refuse;
+    }
 
-    // 4. Apply the decision
-    let (
-        applied_plan,
-        new_model,
-        new_effort,
-        new_tier,
-        applied,
-        reason,
-    ) = match verdict {
+    // 4. Return the safety-approved plan without mutating the session. The
+    // caller applies it to an isolated provider candidate.
+    let (applied_plan, new_tier, reason) = match verdict {
         SafetyVerdict::Refuse => (
             None,
-            session.model.clone(),
-            session.effort.clone(),
             None,
-            false,
-            reason_for_refuse(&plan, cooldown_active, config.confidence_floor),
+            reason_for_refuse(
+                &plan,
+                cooldown_active,
+                swap_budget_exhausted,
+                config.confidence_floor,
+            ),
         ),
         SafetyVerdict::Apply | SafetyVerdict::Modified => {
             let effective = modified_plan.as_ref().unwrap_or(&plan);
-            let target_model = tier_to_model(effective.tier, &session.provider.default_model());
-            let target_effort = effective.effort.clone().unwrap_or_else(|| session.effort.clone());
             (
                 Some(effective.clone()),
-                target_model,
-                target_effort,
                 Some(effective.tier),
-                true,
                 effective.rationale.clone(),
             )
         }
@@ -184,7 +195,8 @@ pub async fn run_turn_with_jev(
     // low confidence, but sensitive is a separate concern.
     let sensitive = plan.sensitive;
 
-    // 5. Persist trace
+    // 5. Build a pending trace. `new_*` remain the actual current values until
+    // the server calls `finalize_routing_decision`.
     let trace = RouterTrace {
         trace_id: plan.trace_id,
         session_id: session.id.clone(),
@@ -197,55 +209,80 @@ pub async fn run_turn_with_jev(
         },
         proposed_tier: Some(plan.tier),
         proposed_effort: plan.effort.clone(),
-        applied,
+        requested_model: Some(requested_model.clone()),
+        requested_effort: Some(requested_effort.clone()),
+        applied: false,
+        application_error: None,
         confidence: plan.confidence,
         rationale: reason.clone(),
         old_model: session.model.clone(),
-        new_model: new_model.clone(),
+        new_model: session.model.clone(),
         old_effort: session.effort.clone(),
-        new_effort: new_effort.clone(),
+        new_effort: session.effort.clone(),
     };
-    crate::trace::persist(home_dir, &trace).await?;
     info!(
         session_id = %session.id,
-        applied,
+        approved = applied_plan.is_some(),
         old_model = %session.model,
-        new_model = %new_model,
-        "per-turn router decision"
+        requested_model,
+        "per-turn router proposal"
     );
-
-    // 6. Update session state if the model changed
-    if applied {
-        session.model = new_model.clone();
-        session.effort = new_effort.clone();
-    }
 
     Ok(TurnRoutingDecision {
         verdict,
         applied_plan,
         trace,
-        new_model,
-        new_effort,
+        new_model: session.model.clone(),
+        new_effort: session.effort.clone(),
+        requested_model: Some(requested_model),
+        requested_effort: Some(requested_effort),
         new_tier,
         reason,
         sensitive,
     })
 }
 
-fn tier_to_model(tier: ModelTier, fallback: &str) -> String {
-    let s = match tier {
-        ModelTier::Fast => "fast",
-        ModelTier::Balanced => "balanced",
-        ModelTier::Strong => "strong",
-        ModelTier::Frontier => "frontier",
-    };
-    // In Phase 2.5 we use the operator-configured tier name as the model
-    // string. Phase 3 will resolve to a concrete provider model id via
-    // `agent.jev_model_tiers`.
-    format!("{s}:{fallback}")
+/// Record the actual live-provider outcome and persist the now-truthful trace.
+/// `session` must be the successfully reconfigured session when `applied` is
+/// true, or the unchanged pre-attempt session when false.
+pub async fn finalize_routing_decision(
+    decision: &mut TurnRoutingDecision,
+    session: &Session,
+    applied: bool,
+    application_error: Option<String>,
+    home_dir: &std::path::Path,
+) -> Result<()> {
+    let applied = applied && decision.applied_plan.is_some() && application_error.is_none();
+    decision.new_model = session.model.clone();
+    decision.new_effort = session.effort.clone();
+    decision.trace.applied = applied;
+    decision.trace.application_error = application_error.clone();
+    decision.trace.new_model = session.model.clone();
+    decision.trace.new_effort = session.effort.clone();
+    if let Some(error) = application_error {
+        decision.reason = format!(
+            "{}; live provider application failed: {error}",
+            decision.reason
+        );
+        decision.trace.rationale = decision.reason.clone();
+    }
+    crate::trace::persist(home_dir, &decision.trace).await?;
+    info!(
+        session_id = %session.id,
+        applied,
+        actual_model = %session.model,
+        actual_effort = %session.effort,
+        "per-turn router outcome"
+    );
+    Ok(())
 }
 
-fn reason_for_refuse(plan: &JevRoutePlan, cooldown_active: bool, floor: f32) -> String {
+fn reason_for_refuse(
+    plan: &JevRoutePlan,
+    cooldown_active: bool,
+    swap_budget_exhausted: bool,
+    floor: f32,
+) -> String {
     if plan.sensitive {
         return "sensitive prompt; routing to human review".into();
     }
@@ -254,6 +291,9 @@ fn reason_for_refuse(plan: &JevRoutePlan, cooldown_active: bool, floor: f32) -> 
     }
     if cooldown_active {
         return "tier swap in cooldown".into();
+    }
+    if swap_budget_exhausted {
+        return "session model-swap budget exhausted".into();
     }
     "unknown reason".into()
 }
@@ -291,18 +331,52 @@ pub fn build_request_from_session(
     session: &Session,
     last_turn_outcome: Option<JevTurnOutcome>,
 ) -> JevClassifyRequest {
+    let available_models = [
+        ModelTier::Fast,
+        ModelTier::Balanced,
+        ModelTier::Strong,
+        ModelTier::Frontier,
+    ]
+    .into_iter()
+    .map(|tier| session.provider.model_for_tier(tier).to_string())
+    .fold(Vec::new(), |mut models, model| {
+        if !models.contains(&model) {
+            models.push(model);
+        }
+        models
+    });
+    let mut available_efforts = session
+        .handle
+        .as_ref()
+        .map(|handle| {
+            handle
+                .provider
+                .available_efforts()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if available_efforts.is_empty() {
+        available_efforts =
+            if session.provider == crate::provider_whitelist::SupportedProvider::Minimax {
+                vec!["none".into()]
+            } else {
+                vec![
+                    "none".into(),
+                    "low".into(),
+                    "medium".into(),
+                    "high".into(),
+                    "max".into(),
+                ]
+            };
+    }
     JevClassifyRequest {
         prompt: user_message.to_string(),
         recent_messages: vec![],
         last_turn_outcome,
-        available_models: vec![session.provider.default_model().to_string()],
-        available_efforts: vec![
-            "none".into(),
-            "low".into(),
-            "medium".into(),
-            "high".into(),
-            "max".into(),
-        ],
+        available_models,
+        available_efforts,
     }
 }
 
@@ -329,6 +403,15 @@ pub fn decision_to_router_trace_value(d: &TurnRoutingDecision) -> Value {
     if let Some(effort) = &d.trace.proposed_effort {
         v["proposedEffort"] = serde_json::json!(effort);
     }
+    if let Some(model) = &d.trace.requested_model {
+        v["requestedModel"] = serde_json::json!(model);
+    }
+    if let Some(effort) = &d.trace.requested_effort {
+        v["requestedEffort"] = serde_json::json!(effort);
+    }
+    if let Some(error) = &d.trace.application_error {
+        v["applicationError"] = serde_json::json!(error);
+    }
     v
 }
 
@@ -352,9 +435,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn applies_plan_when_classifier_says_frontier() {
-        let mut classifier = MockJevClassifier::new();
-        classifier.set_plan(JevRoutePlan::passthrough(ModelTier::Frontier, Some("max".into())));
+    async fn proposes_concrete_provider_model_without_mutating_session() {
+        let classifier = MockJevClassifier::new();
+        classifier.set_plan(JevRoutePlan::passthrough(
+            ModelTier::Frontier,
+            Some("max".into()),
+        ));
 
         let mut s = session();
         let decision = run_turn_with_jev(
@@ -370,14 +456,18 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(decision.trace.applied);
-        assert!(decision.new_model.starts_with("frontier:"));
-        assert_eq!(decision.new_effort, "max");
+        assert!(!decision.trace.applied, "runtime has not applied it yet");
+        assert!(decision.applied_plan.is_some());
+        assert_eq!(decision.requested_model.as_deref(), Some("gpt-6-astra"));
+        assert_eq!(decision.requested_effort.as_deref(), Some("max"));
+        assert_eq!(decision.new_model, "gpt-5.5");
+        assert_eq!(decision.new_effort, "high");
+        assert_eq!(s.model, "gpt-5.5");
     }
 
     #[tokio::test]
     async fn low_confidence_is_refused() {
-        let mut classifier = MockJevClassifier::new();
+        let classifier = MockJevClassifier::new();
         let mut plan = JevRoutePlan::passthrough(ModelTier::Strong, Some("high".into()));
         plan.confidence = 0.3;
         classifier.set_plan(plan);
@@ -409,7 +499,7 @@ mod tests {
         // the integration: at turn 1 with min_turns_between_swaps=2, the
         // hook reports `applied: false` even when the classifier says
         // Strong.
-        let mut classifier = MockJevClassifier::new();
+        let classifier = MockJevClassifier::new();
         let mut plan = JevRoutePlan::passthrough(ModelTier::Strong, Some("high".into()));
         plan.confidence = 0.8;
         classifier.set_plan(plan);
@@ -434,16 +524,22 @@ mod tests {
         .unwrap();
 
         assert!(!decision.trace.applied, "second turn should be in cooldown");
-        assert_eq!(decision.new_model, "gpt-5.5", "model should not have changed");
+        assert_eq!(
+            decision.new_model, "gpt-5.5",
+            "model should not have changed"
+        );
     }
 
     #[tokio::test]
     async fn trace_round_trips_to_router_trace_value() {
-        let mut classifier = MockJevClassifier::new();
-        classifier.set_plan(JevRoutePlan::passthrough(ModelTier::Frontier, Some("max".into())));
+        let classifier = MockJevClassifier::new();
+        classifier.set_plan(JevRoutePlan::passthrough(
+            ModelTier::Frontier,
+            Some("max".into()),
+        ));
 
         let mut s = session();
-        let decision = run_turn_with_jev(
+        let mut decision = run_turn_with_jev(
             Arc::new(classifier),
             &mut s,
             "test",
@@ -456,9 +552,94 @@ mod tests {
         .await
         .unwrap();
 
+        s.model = decision.requested_model.clone().unwrap();
+        s.effort = decision.requested_effort.clone().unwrap();
+        let home = std::env::temp_dir().join(format!("mona-c2-{}", Uuid::new_v4()));
+        finalize_routing_decision(&mut decision, &s, true, None, &home)
+            .await
+            .unwrap();
+
         let v = decision_to_router_trace_value(&decision);
         assert_eq!(v["sessionId"], "test-session");
         assert_eq!(v["applied"], true);
         assert_eq!(v["trigger"], "initial_prompt");
+        assert_eq!(v["requestedModel"], "gpt-6-astra");
+        assert_eq!(v["newModel"], "gpt-6-astra");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn swap_budget_refuses_without_mutating_session() {
+        let classifier = MockJevClassifier::new();
+        classifier.set_plan(JevRoutePlan::passthrough(
+            ModelTier::Frontier,
+            Some("max".into()),
+        ));
+        let mut s = session();
+        let config = RouterConfig {
+            max_swaps_per_session: 1,
+            ..RouterConfig::default()
+        };
+        let decision = run_turn_with_jev(
+            Arc::new(classifier),
+            &mut s,
+            "another escalation",
+            2,
+            1,
+            None,
+            &config,
+            std::path::Path::new("/tmp/mona-test"),
+        )
+        .await
+        .unwrap();
+
+        assert!(decision.applied_plan.is_none());
+        assert!(!decision.trace.applied);
+        assert!(decision.reason.contains("budget"));
+        assert_eq!(s.model, "gpt-5.5");
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_application_records_requested_and_actual_values() {
+        let classifier = MockJevClassifier::new();
+        classifier.set_plan(JevRoutePlan::passthrough(
+            ModelTier::Frontier,
+            Some("max".into()),
+        ));
+        let mut s = session();
+        let mut decision = run_turn_with_jev(
+            Arc::new(classifier),
+            &mut s,
+            "escalate this",
+            0,
+            0,
+            None,
+            &RouterConfig::default(),
+            std::path::Path::new("/tmp/mona-test"),
+        )
+        .await
+        .unwrap();
+        let home = std::env::temp_dir().join(format!("mona-c2-{}", Uuid::new_v4()));
+        finalize_routing_decision(
+            &mut decision,
+            &s,
+            false,
+            Some("model unavailable".into()),
+            &home,
+        )
+        .await
+        .unwrap();
+
+        assert!(!decision.trace.applied);
+        assert_eq!(
+            decision.trace.requested_model.as_deref(),
+            Some("gpt-6-astra")
+        );
+        assert_eq!(decision.trace.new_model, "gpt-5.5");
+        assert_eq!(
+            decision.trace.application_error.as_deref(),
+            Some("model unavailable")
+        );
+        let _ = std::fs::remove_dir_all(home);
     }
 }

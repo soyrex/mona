@@ -16,9 +16,10 @@
 use crate::auth::AuthRegistry;
 use crate::initialize::initialize_result;
 use crate::policy::JevRoutePolicy;
-use crate::provider_whitelist::parse_provider;
 use crate::session::{SessionInfo, SessionRegistry};
-use crate::turn::{RouterConfig, run_turn_with_jev};
+use crate::turn::{
+    RouterConfig, decision_to_router_trace_value, finalize_routing_decision, run_turn_with_jev,
+};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use mona_jev::JevClassifier;
@@ -398,9 +399,10 @@ fn handle_session_auth(id: Value, params: &Value, state: &ServerState) -> Value 
 ///   completion or transport error.
 /// - OAuth refresh during a turn surfaces as `unauthenticated`.
 ///
-/// Phases 2.5 (per-turn Jev routing) and Phase 3 (auth loader) are
-/// unchanged: routing still fires and the router trace is emitted. Applying
-/// its model/effort choice to the live provider remains a later milestone.
+/// Per-turn Jev routing applies its provider-scoped model and effort to an
+/// isolated provider candidate. Only a fully successful candidate replaces
+/// the session runtime; failures are traced and the previous runtime remains
+/// active.
 async fn handle_session_prompt(
     id: Value,
     params: &Value,
@@ -422,8 +424,8 @@ async fn handle_session_prompt(
         None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
     };
 
-    // 1. Run the per-turn router (Phase 2.5 unchanged). Sensitive prompts
-    //    short-circuit to permission_required before we touch the provider.
+    // 1. Run the per-turn router. Sensitive prompts short-circuit to
+    //    permission_required before we touch the provider.
     let (turn_count_for_routing, swaps_in_session) = {
         let counters = state.session_counters.lock().await;
         let entry = counters.inner.get(&session_id).copied().unwrap_or((0, 0));
@@ -433,9 +435,9 @@ async fn handle_session_prompt(
         let mut counters = state.session_counters.lock().await;
         counters.get_or_insert(&session_id).0 += 1;
     }
-    let decision = match run_turn_with_jev(
+    let mut decision = match run_turn_with_jev(
         state.classifier.clone(),
-        &mut session,
+        &session,
         &text,
         turn_count_for_routing,
         swaps_in_session,
@@ -451,14 +453,14 @@ async fn handle_session_prompt(
             return jsonrpc_error(id, -32603, &format!("router hook error: {e}"));
         }
     };
-    if decision.trace.applied {
-        let mut counters = state.session_counters.lock().await;
-        counters.record_swap(&session_id);
-    }
-    state.sessions.update(&session);
     *state.last_classification.lock().await = decision.applied_plan.clone();
 
     if decision.sensitive {
+        if let Err(error) =
+            finalize_routing_decision(&mut decision, &session, false, None, &state.home_dir).await
+        {
+            return jsonrpc_error(id, -32603, &format!("persist router trace: {error}"));
+        }
         return jsonrpc_error(
             id,
             -32001, // permission_required
@@ -466,7 +468,69 @@ async fn handle_session_prompt(
         );
     }
 
-    // 2. Drive the real provider. Sessions created without auth attach a
+    // 2. Apply a safety-approved route to an isolated provider candidate.
+    //    A failed model/effort change leaves this session and its live handle
+    //    untouched, then the prompt continues on the old runtime.
+    let route_requested = decision.applied_plan.is_some();
+    let pre_route_session = session.clone();
+    let mut route_error = None;
+    if route_requested {
+        let authenticated = session
+            .handle
+            .as_ref()
+            .is_some_and(|handle| handle.auth.is_some());
+        if !authenticated {
+            route_error = Some("provider is not authenticated".to_string());
+        } else if let (Some(model), Some(effort)) = (
+            decision.requested_model.as_deref(),
+            decision.requested_effort.as_deref(),
+        ) {
+            let old_model = session.model.clone();
+            let old_effort = session.effort.clone();
+            match session.reconfigure_provider(model, effort) {
+                Ok(()) => {
+                    if !state.sessions.update(&session) {
+                        route_error = Some("session disappeared while applying route".to_string());
+                    } else if session.model != old_model || session.effort != old_effort {
+                        state.session_counters.lock().await.record_swap(&session_id);
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, session_id, model, effort, "live Jev route rolled back");
+                    route_error = Some(error.to_string());
+                }
+            }
+        } else {
+            route_error = Some("router omitted a concrete model or effort".to_string());
+        }
+    }
+    if route_error.is_some() {
+        session = pre_route_session;
+    }
+    let route_applied = route_requested && route_error.is_none();
+    if let Err(error) = finalize_routing_decision(
+        &mut decision,
+        &session,
+        route_applied,
+        route_error,
+        &state.home_dir,
+    )
+    .await
+    {
+        return jsonrpc_error(id, -32603, &format!("persist router trace: {error}"));
+    }
+    let routing = decision_to_router_trace_value(&decision);
+    push_notification(
+        &writer,
+        &session_id,
+        json!({
+            "sessionUpdate": "router_trace",
+            "trace": routing.clone(),
+        }),
+    )
+    .await;
+
+    // 3. Drive the real provider. Sessions created without auth attach a
     //    placeholder handle whose `provider_name` is null AND whose
     //    `auth` is None; trying to `complete` on it would fail inside the
     //    provider. We surface that as `unauthenticated` (-32002) here so
@@ -517,7 +581,7 @@ async fn handle_session_prompt(
         state.client_closed.clone(),
     );
 
-    // 3. Drive the real provider through the shared streaming loop.
+    // 4. Drive the real provider through the shared streaming loop.
     //    `drive_provider_stream` is the testable core; this handler just
     //    maps its outcome back to a JSON-RPC response.
     let outcome = match drive_provider_stream(
@@ -544,6 +608,7 @@ async fn handle_session_prompt(
             "model": handle.provider.model(),
             "effort": session.effort,
             "output": outcome.text,
+            "routing": routing,
             "usage": {
                 "inputTokens": input_tokens,
                 "outputTokens": output_tokens,
@@ -1105,31 +1170,31 @@ fn handle_session_set_model(id: Value, params: &Value, state: &ServerState) -> V
         None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
     };
 
-    // Phase 2: validate the requested model against the session's provider
-    // whitelist. Phase 2.5 will route through `set_model_with_auth_refresh`.
-    if parse_provider(new_model).is_err()
-        && !is_model_under_provider(&new_model, session.provider.as_str())
+    if !session
+        .handle
+        .as_ref()
+        .is_some_and(|handle| handle.auth.is_some())
     {
         return jsonrpc_error(
             id,
-            -32602,
-            &format!(
-                "model `{new_model}` is not compatible with provider `{}`",
-                session.provider.as_str()
-            ),
+            -32002,
+            "cannot change model before provider authentication",
         );
     }
-
-    info!(session_id, old_model = %session.model, new_model, "model set");
-    // Note: actual model mutation happens in the registry in Phase 2.5 when
-    // we have a write-locked Session. For Phase 2, we report success and
-    // log the change.
+    let updated = match state
+        .sessions
+        .reconfigure_provider(session_id, new_model, &session.effort)
+    {
+        Ok(session) => session,
+        Err(error) => return jsonrpc_error(id, -32602, &error.to_string()),
+    };
+    info!(session_id, old_model = %session.model, new_model = %updated.model, "live model set");
     jsonrpc_result(
         id,
         json!({
-            "model": new_model,
-            "phase": "2",
-            "note": "model change recorded; live provider swap lands in Phase 2.5"
+            "model": updated.model,
+            "effort": updated.effort,
+            "applied": true,
         }),
     )
 }
@@ -1144,36 +1209,37 @@ fn handle_session_set_reasoning_effort(id: Value, params: &Value, state: &Server
         None => return jsonrpc_error(id, -32602, "missing effort"),
     };
 
-    if state.sessions.get(session_id).is_none() {
-        return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found"));
+    let session = match state.sessions.get(session_id) {
+        Some(session) => session,
+        None => return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found")),
+    };
+    if !session
+        .handle
+        .as_ref()
+        .is_some_and(|handle| handle.auth.is_some())
+    {
+        return jsonrpc_error(
+            id,
+            -32002,
+            "cannot change reasoning effort before provider authentication",
+        );
     }
-
-    info!(session_id, effort, "reasoning effort set");
+    let updated = match state
+        .sessions
+        .reconfigure_provider(session_id, &session.model, effort)
+    {
+        Ok(session) => session,
+        Err(error) => return jsonrpc_error(id, -32602, &error.to_string()),
+    };
+    info!(session_id, effort = %updated.effort, "live reasoning effort set");
     jsonrpc_result(
         id,
         json!({
-            "effort": effort,
-            "phase": "2",
-            "note": "effort change recorded; live provider swap lands in Phase 2.5"
+            "model": updated.model,
+            "effort": updated.effort,
+            "applied": true,
         }),
     )
-}
-
-fn is_model_under_provider(model: &str, provider: &str) -> bool {
-    // Lightweight validation: each provider has a recognizable prefix in the
-    // model name. Phase 2.5 uses the full `Provider::available_models()`.
-    let m = model.to_ascii_lowercase();
-    match provider {
-        "codex" => m.starts_with("gpt-") || m.starts_with("o") || m.starts_with("codex"),
-        "claude" => {
-            m.starts_with("claude")
-                || m.contains("sonnet")
-                || m.contains("opus")
-                || m.contains("haiku")
-        }
-        "minimax" => m.starts_with("minimax") || m.starts_with("abab"),
-        _ => false,
-    }
 }
 
 fn jsonrpc_result(id: Value, result: Value) -> Value {

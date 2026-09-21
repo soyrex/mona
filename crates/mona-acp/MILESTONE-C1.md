@@ -45,8 +45,7 @@ smoke remains the live integration check.
 
 ## Deliberate follow-ons
 
-- Apply Jev-selected model and effort to the live provider rather than session
-  metadata only.
+- Jev-selected model and effort application is complete in Milestone C.2.
 - Persist multi-turn conversation history and durable resume state.
 - Interrupt a running provider or shell process from `session/cancel`.
 - Add a live Monitter approval smoke with an authenticated provider when an

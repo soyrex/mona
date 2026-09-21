@@ -9,6 +9,7 @@
 //! Anything else is rejected with a clear error message. The full provider
 //! matrix (OpenRouter, Bedrock, Copilot, Gemini, etc.) lands in Phase 4.
 
+use mona_jev::ModelTier;
 use serde::{Deserialize, Serialize};
 
 /// The three providers Phase 2 supports.
@@ -32,7 +33,31 @@ impl SupportedProvider {
     /// Default reasoning effort for this provider.
     pub fn default_effort(&self) -> &'static str {
         match self {
-            Self::Codex | Self::Claude | Self::Minimax => "high",
+            Self::Codex | Self::Claude => "high",
+            // The direct MiniMax profile does not expose a configurable
+            // reasoning-effort control. Reporting `high` here would make the
+            // ACP session metadata disagree with the live runtime.
+            Self::Minimax => "none",
+        }
+    }
+
+    /// Resolve Jev's provider-agnostic quality tier to a concrete model that
+    /// belongs to this session's existing provider. C.2 deliberately keeps
+    /// provider identity and credentials fixed; a route may change capability,
+    /// never the billing/auth backend.
+    pub fn model_for_tier(&self, tier: ModelTier) -> &'static str {
+        match (self, tier) {
+            (Self::Codex, ModelTier::Fast) => "gpt-5.1-codex-mini",
+            (Self::Codex, ModelTier::Balanced) => "gpt-5.4",
+            (Self::Codex, ModelTier::Strong) => "gpt-5.5",
+            (Self::Codex, ModelTier::Frontier) => "gpt-6-astra",
+            (Self::Claude, ModelTier::Fast) => "claude-haiku-4-5",
+            (Self::Claude, ModelTier::Balanced) => "claude-sonnet-4-6",
+            (Self::Claude, ModelTier::Strong) => "claude-opus-4-8",
+            (Self::Claude, ModelTier::Frontier) => "claude-opus-5",
+            (Self::Minimax, ModelTier::Fast) => "MiniMax-M2.7-highspeed",
+            (Self::Minimax, ModelTier::Balanced) => "MiniMax-M2.7",
+            (Self::Minimax, ModelTier::Strong | ModelTier::Frontier) => "MiniMax-M3",
         }
     }
 
@@ -122,15 +147,24 @@ mod tests {
     fn parses_canonical_names() {
         assert_eq!(parse_provider("codex").unwrap(), SupportedProvider::Codex);
         assert_eq!(parse_provider("claude").unwrap(), SupportedProvider::Claude);
-        assert_eq!(parse_provider("minimax").unwrap(), SupportedProvider::Minimax);
+        assert_eq!(
+            parse_provider("minimax").unwrap(),
+            SupportedProvider::Minimax
+        );
     }
 
     #[test]
     fn parses_provider_aliases() {
         assert_eq!(parse_provider("openai").unwrap(), SupportedProvider::Codex);
-        assert_eq!(parse_provider("anthropic").unwrap(), SupportedProvider::Claude);
+        assert_eq!(
+            parse_provider("anthropic").unwrap(),
+            SupportedProvider::Claude
+        );
         assert_eq!(parse_provider("sonnet").unwrap(), SupportedProvider::Claude);
-        assert_eq!(parse_provider("MiniMax-M3").unwrap(), SupportedProvider::Minimax);
+        assert_eq!(
+            parse_provider("MiniMax-M3").unwrap(),
+            SupportedProvider::Minimax
+        );
     }
 
     #[test]
@@ -146,7 +180,27 @@ mod tests {
     #[test]
     fn default_models_match_locked_phase2_plan() {
         assert_eq!(SupportedProvider::Codex.default_model(), "gpt-5.5");
-        assert_eq!(SupportedProvider::Claude.default_model(), "claude-sonnet-4-6");
+        assert_eq!(
+            SupportedProvider::Claude.default_model(),
+            "claude-sonnet-4-6"
+        );
         assert_eq!(SupportedProvider::Minimax.default_model(), "MiniMax-M3");
+    }
+
+    #[test]
+    fn jev_tiers_resolve_inside_the_existing_provider() {
+        assert_eq!(
+            SupportedProvider::Codex.model_for_tier(ModelTier::Frontier),
+            "gpt-6-astra"
+        );
+        assert_eq!(
+            SupportedProvider::Claude.model_for_tier(ModelTier::Fast),
+            "claude-haiku-4-5"
+        );
+        assert_eq!(
+            SupportedProvider::Minimax.model_for_tier(ModelTier::Balanced),
+            "MiniMax-M2.7"
+        );
+        assert_eq!(SupportedProvider::Minimax.default_effort(), "none");
     }
 }

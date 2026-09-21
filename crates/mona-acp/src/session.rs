@@ -57,6 +57,30 @@ impl Session {
             handle,
         }
     }
+
+    /// Atomically prepare and install a provider replacement for this already
+    /// authenticated session. Construction and effort validation happen first,
+    /// so an error leaves the existing handle, model, and effort unchanged.
+    pub fn reconfigure_provider(&mut self, model: &str, effort: &str) -> Result<(), SessionError> {
+        let replacement = self
+            .handle
+            .as_ref()
+            .ok_or(SessionError::NoProviderHandle)?
+            .reconfigure(model, effort)
+            .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
+        // Provider runtimes may normalize a requested value (or express a
+        // disabled effort as `None`). Persist the actual live selection, not
+        // an optimistic echo of the request.
+        let actual_model = replacement.provider.model();
+        let actual_effort = replacement
+            .provider
+            .reasoning_effort()
+            .unwrap_or_else(|| "none".to_string());
+        self.handle = Some(replacement);
+        self.model = actual_model;
+        self.effort = actual_effort;
+        Ok(())
+    }
 }
 
 /// Shared session registry. Held behind a Mutex by the server loop.
@@ -75,20 +99,26 @@ impl SessionRegistry {
         auth: &AuthRegistry,
     ) -> Result<Session, SessionError> {
         let provider = parse_provider(provider_str)?;
-        let handle = build_provider_with_model(
-            provider_str,
-            auth,
-            model.unwrap_or(provider.default_model()),
-        )
-        .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
+        let requested_model = model.unwrap_or(provider.default_model());
+        let requested_effort = effort.unwrap_or(provider.default_effort());
+        let handle = build_provider_with_model(provider_str, auth, requested_model)
+            .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
+        // Apply the initial effort to an authenticated runtime before storing
+        // the session. Placeholder handles intentionally remain usable for
+        // list/cancel without pretending to have live provider state.
+        let handle = if handle.auth.is_some() {
+            handle
+                .reconfigure(requested_model, requested_effort)
+                .map_err(|e| SessionError::ProviderBuild(e.to_string()))?
+        } else {
+            handle
+        };
+        let live_model = handle.provider.model();
+        let live_effort = handle.provider.reasoning_effort();
         let session = Session::new(
             provider,
-            model
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| provider.default_model().to_string()),
-            effort
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| provider.default_effort().to_string()),
+            live_model,
+            live_effort.unwrap_or_else(|| requested_effort.to_string()),
             working_dir,
             Some(handle),
         );
@@ -115,11 +145,30 @@ impl SessionRegistry {
             existing.model = session.model.clone();
             existing.effort = session.effort.clone();
             existing.working_dir = session.working_dir.clone();
-            // Don't clobber the handle — it was set at new_session time.
+            // A successfully reconfigured session carries a fresh handle.
+            // Persist it with the metadata; failed reconfiguration never
+            // produces a changed session to pass here.
+            existing.handle = session.handle.clone();
             true
         } else {
             false
         }
+    }
+
+    /// Reconfigure an existing authenticated session's live provider. The
+    /// stored session is mutated only after a replacement handle is ready.
+    pub fn reconfigure_provider(
+        &self,
+        id: &str,
+        model: &str,
+        effort: &str,
+    ) -> Result<Session, SessionError> {
+        let mut inner = self.inner.lock().unwrap();
+        let session = inner
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_owned()))?;
+        session.reconfigure_provider(model, effort)?;
+        Ok(session.clone())
     }
 
     pub fn list(&self) -> Vec<Session> {
@@ -133,6 +182,10 @@ pub enum SessionError {
     Provider(#[from] crate::provider_whitelist::ProviderError),
     #[error("provider construction failed: {0}")]
     ProviderBuild(String),
+    #[error("session has no provider handle")]
+    NoProviderHandle,
+    #[error("session `{0}` not found")]
+    NotFound(String),
 }
 
 /// JSON-RPC result payload for `session/new` and `session/resume`.
@@ -258,6 +311,56 @@ mod tests {
             .unwrap();
         assert_eq!(session.model, "gpt-5.4");
         assert_eq!(session.handle.unwrap().provider.model(), "gpt-5.4");
+    }
+
+    #[test]
+    fn reconfigure_swaps_a_fully_configured_runtime_and_update_persists_it() {
+        let registry = SessionRegistry::default();
+        let mut session = registry
+            .new_session("codex", None, None, None, &registry_with_all())
+            .unwrap();
+
+        session.reconfigure_provider("gpt-5.4", "high").unwrap();
+        assert_eq!(session.model, "gpt-5.4");
+        assert_eq!(session.effort, "high");
+        assert_eq!(session.handle.as_ref().unwrap().provider.model(), "gpt-5.4");
+        assert_eq!(
+            session
+                .handle
+                .as_ref()
+                .unwrap()
+                .provider
+                .reasoning_effort()
+                .as_deref(),
+            Some("high")
+        );
+
+        assert!(registry.update(&session));
+        let stored = registry.get(&session.id).unwrap();
+        assert_eq!(stored.handle.unwrap().provider.model(), "gpt-5.4");
+    }
+
+    #[test]
+    fn failed_reconfigure_keeps_the_live_handle_and_session_metadata() {
+        let registry = SessionRegistry::default();
+        let mut session = registry
+            .new_session("codex", None, None, None, &registry_with_all())
+            .unwrap();
+        let original_model = session.model.clone();
+        let original_effort = session.effort.clone();
+        let original_handle = session.handle.as_ref().unwrap().clone();
+
+        let err = session
+            .reconfigure_provider("claude-sonnet-4-6", "high")
+            .unwrap_err();
+        assert!(matches!(err, SessionError::ProviderBuild(_)));
+        assert_eq!(session.model, original_model);
+        assert_eq!(session.effort, original_effort);
+        assert!(Arc::ptr_eq(
+            &session.handle.as_ref().unwrap().provider,
+            &original_handle.provider
+        ));
+        assert_eq!(session.handle.as_ref().unwrap().provider.model(), "gpt-5.5");
     }
 
     #[test]

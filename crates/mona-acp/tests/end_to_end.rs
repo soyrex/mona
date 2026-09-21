@@ -9,8 +9,8 @@
 //! - `session/list` includes the freshly created session.
 //! - `session/prompt` reports unauthenticated cleanly when no provider
 //!   credential is configured (live provider turns remain opt-in).
-//! - `session/set_model` and `session/set_reasoning_effort` succeed for a
-//!   real session.
+//! - `session/set_model` and `session/set_reasoning_effort` reject an
+//!   unauthenticated session and reconfigure an authenticated one.
 //! - `session/cancel` removes the session.
 //! - `session/new` with `provider=gemini` rejects with the friendly
 //!   whitelist error.
@@ -22,6 +22,21 @@
 use serde_json::Value;
 use std::io::{BufRead, Write};
 use std::process::{Command, Stdio};
+
+/// Read JSON-RPC frames until the response for `id` arrives. A prompt may
+/// emit ACP notifications before its response, so reading exactly one line is
+/// not a valid request/response assumption.
+fn read_response_for_id<R: BufRead>(reader: &mut R, id: i64) -> Value {
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line).expect("read JSON-RPC frame");
+        assert_ne!(bytes, 0, "server closed before response id {id}");
+        let frame: Value = serde_json::from_str(line.trim()).expect("JSON-RPC frame");
+        if frame.get("id").and_then(Value::as_i64) == Some(id) {
+            return frame;
+        }
+    }
+}
 
 fn mona_acp_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_mona-acp"))
@@ -147,9 +162,7 @@ fn full_session_lifecycle() {
         r#"{{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{{"sessionId":"{session_id}","text":"hello mona"}}}}"#
     )
     .expect("write prompt");
-    line.clear();
-    reader.read_line(&mut line).expect("read prompt resp");
-    let prompt_resp: Value = serde_json::from_str(line.trim()).expect("prompt resp json");
+    let prompt_resp = read_response_for_id(&mut reader, 2);
     assert_eq!(prompt_resp["error"]["code"], -32002);
     assert!(
         prompt_resp["error"]["message"]
@@ -167,7 +180,7 @@ fn full_session_lifecycle() {
     line.clear();
     reader.read_line(&mut line).expect("read set_model resp");
     let set_model_resp: Value = serde_json::from_str(line.trim()).expect("set_model resp json");
-    assert_eq!(set_model_resp["result"]["model"], "gpt-5.5");
+    assert_eq!(set_model_resp["error"]["code"], -32002);
 
     // 4. session/set_reasoning_effort
     writeln!(
@@ -178,7 +191,7 @@ fn full_session_lifecycle() {
     line.clear();
     reader.read_line(&mut line).expect("read set_effort resp");
     let set_effort_resp: Value = serde_json::from_str(line.trim()).expect("set_effort resp json");
-    assert_eq!(set_effort_resp["result"]["effort"], "high");
+    assert_eq!(set_effort_resp["error"]["code"], -32002);
 
     // 5. session/cancel
     writeln!(
@@ -215,10 +228,10 @@ fn unsupported_provider_is_rejected_with_helpful_message() {
     assert!(msg.contains("minimax"));
 }
 
-/// Phase 2.5: the per-turn router fires inside session/prompt, classifies
-/// the prompt, applies safety gates, persists a router-trace JSON, and
-/// updates the session's model. We use a complex prompt that the
-/// rule-based classifier maps to `Strong` tier.
+/// The per-turn router fires inside session/prompt and persists the truthful
+/// runtime-application outcome. We use a complex prompt that the rule-based
+/// classifier maps to `Strong` tier, but leave auth unconfigured so applying
+/// that proposal must fail closed.
 #[test]
 fn per_turn_router_fires_on_session_prompt() {
     let bin = mona_acp_bin();
@@ -260,16 +273,14 @@ fn per_turn_router_fires_on_session_prompt() {
 
     // 2. session/prompt with a complex prompt (triggers Strong tier).
     //    No auth is configured, so the prompt itself fails with
-    //    `unauthenticated` (-32002). The router still fires first and
-    //    persists its trace, which we assert on next.
+    //    `unauthenticated` (-32002). The router still records its proposal and
+    //    the failed live-application outcome.
     writeln!(
         stdin,
         r#"{{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{{"sessionId":"{session_id}","text":"design a new architecture for the auth system across the codebase"}}}}"#
     )
     .expect("write prompt");
-    line.clear();
-    reader.read_line(&mut line).expect("read prompt resp");
-    let prompt_resp: Value = serde_json::from_str(line.trim()).expect("prompt resp json");
+    let prompt_resp = read_response_for_id(&mut reader, 2);
 
     assert_eq!(prompt_resp["error"]["code"], -32002);
 
@@ -284,8 +295,15 @@ fn per_turn_router_fires_on_session_prompt() {
     let trace: Value =
         serde_json::from_str(&std::fs::read_to_string(traces[0].path()).unwrap()).unwrap();
     assert_eq!(trace["session_id"], session_id);
-    assert_eq!(trace["applied"], true);
+    assert_eq!(trace["applied"], false);
     assert_eq!(trace["proposed_tier"], "Strong");
+    assert_eq!(trace["requested_model"], "gpt-5.5");
+    assert_eq!(trace["new_model"], "gpt-5.5");
+    assert!(
+        trace["application_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("not authenticated"))
+    );
     assert_eq!(trace["trigger"], "initial_prompt");
 
     // 4. session/cancel
@@ -525,10 +543,82 @@ fn auth_loader_picks_up_api_key_file() {
     assert!(summary.contains("sk-t")); // head
     assert!(summary.contains("cdef")); // tail
 
+    // C.2: manual model/effort changes reconfigure the live provider without
+    // making a network request, and the registry reports the actual values.
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":4,"method":"session/set_model","params":{{"sessionId":"{session_id}","model":"gpt-5.4"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let set_model: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(set_model["result"]["model"], "gpt-5.4");
+    assert_eq!(set_model["result"]["effort"], "high");
+    assert_eq!(set_model["result"]["applied"], true);
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":5,"method":"session/set_reasoning_effort","params":{{"sessionId":"{session_id}","effort":"low"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let set_effort: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(set_effort["result"]["model"], "gpt-5.4");
+    assert_eq!(set_effort["result"]["effort"], "low");
+    assert_eq!(set_effort["result"]["applied"], true);
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":6,"method":"session/list","params":{{}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let listed: Value = serde_json::from_str(line.trim()).unwrap();
+    let codex = listed["result"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["sessionId"] == session_id)
+        .unwrap();
+    assert_eq!(codex["model"], "gpt-5.4");
+    assert_eq!(codex["effort"], "low");
+
+    // A cross-provider model is rejected and the working provider selection
+    // remains unchanged (the failed candidate is never installed).
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":7,"method":"session/set_model","params":{{"sessionId":"{session_id}","model":"claude-sonnet-4-6"}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let rejected_model: Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(rejected_model["error"]["code"], -32602);
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":8,"method":"session/list","params":{{}}}}"#
+    )
+    .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let listed_after_rejection: Value = serde_json::from_str(line.trim()).unwrap();
+    let codex_after_rejection = listed_after_rejection["result"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["sessionId"] == session_id)
+        .unwrap();
+    assert_eq!(codex_after_rejection["model"], "gpt-5.4");
+    assert_eq!(codex_after_rejection["effort"], "low");
+
     // session/auth on a session whose provider is NOT configured (claude)
     writeln!(
         stdin,
-        r#"{{"jsonrpc":"2.0","id":4,"method":"session/new","params":{{"provider":"claude"}}}}"#
+        r#"{{"jsonrpc":"2.0","id":9,"method":"session/new","params":{{"provider":"claude"}}}}"#
     )
     .unwrap();
     line.clear();
@@ -538,7 +628,7 @@ fn auth_loader_picks_up_api_key_file() {
 
     writeln!(
         stdin,
-        r#"{{"jsonrpc":"2.0","id":5,"method":"session/auth","params":{{"sessionId":"{claude_session_id}"}}}}"#
+        r#"{{"jsonrpc":"2.0","id":10,"method":"session/auth","params":{{"sessionId":"{claude_session_id}"}}}}"#
     )
     .unwrap();
     line.clear();

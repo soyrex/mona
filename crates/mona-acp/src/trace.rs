@@ -21,7 +21,16 @@ pub struct RouterTrace {
     pub trigger: TraceTrigger,
     pub proposed_tier: Option<ModelTier>,
     pub proposed_effort: Option<String>,
+    /// Concrete provider-scoped model requested after resolving the Jev tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_model: Option<String>,
+    /// Concrete effort requested from the live provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_effort: Option<String>,
     pub applied: bool,
+    /// Why a safety-approved route could not be applied to the live runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_error: Option<String>,
     pub confidence: f32,
     pub rationale: String,
     pub old_model: String,
@@ -121,7 +130,10 @@ mod tests {
             trigger: TraceTrigger::InitialPrompt,
             proposed_tier: Some(ModelTier::Balanced),
             proposed_effort: Some("medium".into()),
+            requested_model: Some("y".into()),
+            requested_effort: Some("high".into()),
             applied: true,
+            application_error: None,
             confidence: 0.7,
             rationale: "test".into(),
             old_model: "x".into(),

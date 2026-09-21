@@ -8,9 +8,10 @@
 //!
 //! Current status: provider construction and streamed model turns are real.
 //! Milestone C.1 adds a bounded in-server tool loop with ACP one-time
-//! permissions for mutating tools. Durable history, mid-turn cancellation,
-//! and applying Jev model/effort choices to the live provider remain later
-//! milestones.
+//! permissions for mutating tools. Milestone C.2 applies Jev-selected model
+//! and effort changes atomically to the live provider and reports requested
+//! versus actual routing outcomes. Durable history and mid-turn cancellation
+//! remain later milestones.
 
 #![forbid(unsafe_code)]
 
