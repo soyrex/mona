@@ -400,6 +400,58 @@ impl SessionRegistry {
         Ok(result)
     }
 
+    /// Atomically switch an authenticated session to a provider-qualified
+    /// model. The replacement runtime is completely constructed before the
+    /// durable/live session is changed, so a failed provider or model switch
+    /// leaves the existing session untouched.
+    pub fn switch_provider_model(
+        &self,
+        id: &str,
+        provider: SupportedProvider,
+        model: &str,
+        auth: &AuthRegistry,
+    ) -> Result<Session, SessionError> {
+        if !auth.has_auth(provider) {
+            return Err(SessionError::MissingAuth(provider));
+        }
+        let base = build_provider_with_model(provider.as_str(), auth, model)
+            .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
+        let efforts = base.provider.available_efforts();
+        let requested_effort = if efforts.is_empty() {
+            "none"
+        } else if efforts.contains(&provider.default_effort()) {
+            provider.default_effort()
+        } else {
+            efforts[0]
+        };
+        let replacement = base
+            .reconfigure(model, requested_effort)
+            .map_err(|e| SessionError::ProviderBuild(e.to_string()))?;
+        let actual_model = replacement.provider.model();
+        let actual_effort = replacement
+            .provider
+            .reasoning_effort()
+            .unwrap_or_else(|| "none".to_string());
+
+        let mut inner = self.inner.lock().unwrap();
+        let mut next = RegistryState {
+            sessions: inner.sessions.clone(),
+            contexts: inner.contexts.clone(),
+        };
+        let session = next
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_owned()))?;
+        session.provider = provider;
+        session.model = actual_model;
+        session.effort = actual_effort;
+        session.handle = Some(replacement);
+        let result = session.clone();
+        self.persist_state(&next)?;
+        *inner = next;
+        Ok(result)
+    }
+
     pub fn list(&self) -> Vec<Session> {
         self.inner
             .lock()

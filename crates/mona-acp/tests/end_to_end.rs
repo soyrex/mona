@@ -39,6 +39,15 @@ fn read_response_for_id<R: BufRead>(reader: &mut R, id: i64) -> Value {
     }
 }
 
+fn config_option<'a>(response: &'a Value, id: &str) -> &'a Value {
+    response["result"]["configOptions"]
+        .as_array()
+        .expect("config options")
+        .iter()
+        .find(|option| option["id"].as_str() == Some(id))
+        .unwrap_or_else(|| panic!("missing config option {id}"))
+}
+
 fn mona_acp_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_mona-acp"))
 }
@@ -158,12 +167,10 @@ fn full_session_lifecycle() {
     assert_eq!(new_resp["result"]["model"], "gpt-5.5");
     assert_eq!(new_resp["result"]["effort"], "high");
     assert_eq!(new_resp["result"]["provider"], "codex");
-    assert_eq!(
-        new_resp["result"]["configOptions"][0]["currentValue"],
-        "default"
-    );
+    let permission = config_option(&new_resp, "permissionMode");
+    assert_eq!(permission["currentValue"], "default");
     assert!(
-        new_resp["result"]["configOptions"][0]["options"]
+        permission["options"]
             .as_array()
             .expect("permission options")
             .iter()
@@ -180,7 +187,7 @@ fn full_session_lifecycle() {
     .expect("write permission mode");
     let permission_resp = read_response_for_id(&mut reader, 6);
     assert_eq!(
-        permission_resp["result"]["configOptions"][0]["currentValue"],
+        config_option(&permission_resp, "permissionMode")["currentValue"],
         "bypassPermissions"
     );
 

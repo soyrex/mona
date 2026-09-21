@@ -17,7 +17,8 @@ use crate::auth::AuthRegistry;
 use crate::initialize::initialize_result;
 use crate::mcp::SessionMcpTools;
 use crate::policy::JevRoutePolicy;
-use crate::session::{PermissionMode, SessionInfo, SessionRegistry};
+use crate::provider_whitelist::SupportedProvider;
+use crate::session::{PermissionMode, Session, SessionInfo, SessionRegistry};
 use crate::trace::{RouterTrace, TraceTrigger};
 use crate::turn::{
     RouterConfig, decision_to_router_trace_value, finalize_routing_decision,
@@ -360,7 +361,7 @@ async fn handle_session_new(id: Value, params: &Value, state: &ServerState) -> V
                     "monitterPhase": "3.5",
                     "jev_routing": true,
                     "mcpToolCount": mcp_tool_count,
-                    "configOptions": permission_config_options(session.permission_mode),
+                    "configOptions": session_config_options(&session, &state.auth.read().expect("auth registry lock poisoned")),
                 }),
             )
         }
@@ -424,7 +425,7 @@ async fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -
                     "effort": info.effort,
                     "resumed": true,
                     "mcpToolCount": mcp_tool_count,
-                    "configOptions": permission_config_options(s.permission_mode),
+                    "configOptions": session_config_options(&s, &state.auth.read().expect("auth registry lock poisoned")),
                 }),
             )
         }
@@ -443,8 +444,8 @@ async fn handle_session_resume(id: Value, params: &Value, state: &ServerState) -
 /// The permission selector is intentionally small and exact. Monitter treats
 /// `bypassPermissions` as an authority-bearing contract, rather than guessing
 /// it from a harness name or a presentation category.
-fn permission_config_options(mode: PermissionMode) -> Vec<Value> {
-    vec![json!({
+fn permission_config_option(mode: PermissionMode) -> Value {
+    json!({
         "id": "permissionMode",
         "name": "Permission mode",
         "category": "_permission",
@@ -454,7 +455,101 @@ fn permission_config_options(mode: PermissionMode) -> Vec<Value> {
             { "value": "default", "name": "Ask before running tools" },
             { "value": "bypassPermissions", "name": "Bypass permissions" },
         ],
-    })]
+    })
+}
+
+fn qualified_model_id(provider: SupportedProvider, model: &str) -> String {
+    format!("{}/{}", provider.as_str(), model)
+}
+
+fn parse_qualified_model_id(value: &str) -> Option<(SupportedProvider, &str)> {
+    let (provider, model) = value.split_once('/')?;
+    let provider = crate::provider_whitelist::parse_provider(provider).ok()?;
+    (!model.trim().is_empty()).then_some((provider, model))
+}
+
+/// Advertise every model known by every currently authenticated Mona
+/// provider. Values are provider-qualified so identical model names can never
+/// silently cross credential or billing boundaries.
+fn model_config_option(session: &Session, auth: &AuthRegistry) -> Value {
+    let mut groups = Vec::new();
+    for provider in SupportedProvider::all() {
+        if !auth.has_auth(*provider) {
+            continue;
+        }
+        let handle = if *provider == session.provider {
+            session.handle.clone()
+        } else {
+            crate::provider::build_provider_with_model(
+                provider.as_str(),
+                auth,
+                provider.default_model(),
+            )
+            .ok()
+        };
+        let Some(handle) = handle else { continue };
+        let mut models = Vec::<String>::new();
+        let mut add = |model: String| {
+            let model = model.trim().to_string();
+            if !model.is_empty() && !models.iter().any(|known| known == &model) {
+                models.push(model);
+            }
+        };
+        if *provider == session.provider {
+            add(session.model.clone());
+        }
+        add(provider.default_model().to_string());
+        for tier in [
+            mona_jev::ModelTier::Fast,
+            mona_jev::ModelTier::Balanced,
+            mona_jev::ModelTier::Strong,
+            mona_jev::ModelTier::Frontier,
+        ] {
+            add(provider.model_for_tier(tier).to_string());
+        }
+        for model in handle.provider.available_models_for_switching() {
+            add(model);
+        }
+        for model in handle.provider.available_models_display() {
+            add(model);
+        }
+        for model in handle.provider.available_models() {
+            add(model.to_string());
+        }
+        let options = models
+            .into_iter()
+            .map(|model| {
+                json!({
+                    "value": qualified_model_id(*provider, &model),
+                    "name": model,
+                    "description": format!("{} via Mona", provider.display_name()),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !options.is_empty() {
+            groups.push(json!({
+                "group": provider.as_str(),
+                "name": provider.display_name(),
+                "options": options,
+            }));
+        }
+    }
+    json!({
+        "id": "model",
+        "name": "Provider and model",
+        "description": "Choose any model available through Mona's configured providers.",
+        "category": "model",
+        "type": "select",
+        "currentValue": qualified_model_id(session.provider, &session.model),
+        "options": groups,
+    })
+}
+
+fn session_config_options(session: &Session, auth: &AuthRegistry) -> Vec<Value> {
+    vec![
+        model_config_option(session, auth),
+        permission_config_option(session.permission_mode),
+    ]
 }
 
 async fn handle_session_set_config_option(
@@ -471,37 +566,60 @@ async fn handle_session_set_config_option(
         Some(config_id) => config_id,
         None => return jsonrpc_error(id, -32602, "missing configId"),
     };
-    if config_id != "permissionMode" {
-        return jsonrpc_error(id, -32602, &format!("unknown configId `{config_id}`"));
-    }
     let value = match params.get("value").and_then(Value::as_str) {
         Some(value) => value,
         None => return jsonrpc_error(id, -32602, "missing config value"),
     };
-    let permission_mode = match PermissionMode::from_acp_value(value) {
-        Some(mode) => mode,
-        None => {
-            return jsonrpc_error(
-                id,
-                -32602,
-                &format!("invalid value `{value}` for permissionMode"),
-            );
-        }
-    };
-
-    // A prompt snapshots this setting before it opens the agent loop. Reject
-    // any race instead of allowing a mid-turn permission escalation.
+    // A prompt snapshots model and permission state before it opens the agent
+    // loop. Reject any mid-turn configuration race.
     if state.inflight_turns.lock().await.contains_key(session_id) {
         return jsonrpc_error(
             id,
             -32000,
-            "cannot change permission mode while a prompt is active",
+            "cannot change session configuration while a prompt is active",
         );
     }
-    let updated = match state
-        .sessions
-        .set_permission_mode(session_id, permission_mode)
-    {
+    let updated = match config_id {
+        "permissionMode" => {
+            let Some(permission_mode) = PermissionMode::from_acp_value(value) else {
+                return jsonrpc_error(
+                    id,
+                    -32602,
+                    &format!("invalid value `{value}` for permissionMode"),
+                );
+            };
+            state
+                .sessions
+                .set_permission_mode(session_id, permission_mode)
+        }
+        "model" => {
+            let Some((provider, model)) = parse_qualified_model_id(value) else {
+                return jsonrpc_error(id, -32602, "model must be a provider-qualified id");
+            };
+            let auth = state.auth.read().expect("auth registry lock poisoned");
+            let current = match state.sessions.get(session_id) {
+                Some(session) => session,
+                None => {
+                    return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found"));
+                }
+            };
+            let advertised = model_config_option(&current, &auth);
+            let allowed = advertised["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|group| group["options"].as_array().into_iter().flatten())
+                .any(|option| option["value"].as_str() == Some(value));
+            if !allowed {
+                return jsonrpc_error(id, -32602, "model was not advertised by Mona");
+            }
+            state
+                .sessions
+                .switch_provider_model(session_id, provider, model, &auth)
+        }
+        _ => return jsonrpc_error(id, -32602, &format!("unknown configId `{config_id}`")),
+    };
+    let updated = match updated {
         Ok(session) => session,
         Err(crate::session::SessionError::NotFound(_)) => {
             return jsonrpc_error(id, -32004, &format!("session `{session_id}` not found"));
@@ -510,11 +628,14 @@ async fn handle_session_set_config_option(
             return jsonrpc_error(
                 id,
                 -32603,
-                &format!("could not persist permission mode: {error}"),
+                &format!("could not persist session configuration: {error}"),
             );
         }
     };
-    let config_options = permission_config_options(updated.permission_mode);
+    let config_options = session_config_options(
+        &updated,
+        &state.auth.read().expect("auth registry lock poisoned"),
+    );
     push_notification(
         &writer,
         &updated.id,
@@ -2343,11 +2464,14 @@ mod tests {
         );
         let advertised =
             handle_session_new(json!(0), &json!({ "provider": "codex" }), &state).await;
-        assert_eq!(
-            advertised["result"]["configOptions"][0]["currentValue"],
-            "default"
-        );
-        assert_eq!(advertised["result"]["configOptions"][0]["type"], "select");
+        let permission = advertised["result"]["configOptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["id"] == "permissionMode")
+            .unwrap();
+        assert_eq!(permission["currentValue"], "default");
+        assert_eq!(permission["type"], "select");
         let session = state
             .sessions
             .new_session("codex", None, None, None, &AuthRegistry::default())
@@ -2365,17 +2489,16 @@ mod tests {
             writer,
         )
         .await;
-        assert_eq!(result["result"]["configOptions"][0]["id"], "permissionMode");
-        assert_eq!(
-            result["result"]["configOptions"][0]["category"],
-            "_permission"
-        );
-        assert_eq!(
-            result["result"]["configOptions"][0]["currentValue"],
-            "bypassPermissions"
-        );
+        let permission = result["result"]["configOptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["id"] == "permissionMode")
+            .unwrap();
+        assert_eq!(permission["category"], "_permission");
+        assert_eq!(permission["currentValue"], "bypassPermissions");
         assert!(
-            result["result"]["configOptions"][0]["options"]
+            permission["options"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2398,10 +2521,13 @@ mod tests {
         );
         let resumed =
             handle_session_resume(json!(5), &json!({ "sessionId": session.id }), &state).await;
-        assert_eq!(
-            resumed["result"]["configOptions"][0]["currentValue"],
-            "bypassPermissions"
-        );
+        let resumed_permission = resumed["result"]["configOptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["id"] == "permissionMode")
+            .unwrap();
+        assert_eq!(resumed_permission["currentValue"], "bypassPermissions");
         let notifications = read_lines(output).await;
         assert_eq!(
             notifications[0]["params"]["update"]["sessionUpdate"],
@@ -2438,6 +2564,73 @@ mod tests {
         )
         .await;
         assert_eq!(active["error"]["code"], -32000);
+    }
+
+    #[tokio::test]
+    async fn model_catalog_advertises_all_configured_providers_and_switches_atomically() {
+        let home = tempfile::tempdir().unwrap();
+        let state = ServerState::new(
+            home.path().to_path_buf(),
+            Arc::new(mona_jev::MockJevClassifier::new()),
+        );
+        {
+            let mut auth = state.auth.write().unwrap();
+            auth.inner_mut().insert(
+                SupportedProvider::Codex,
+                crate::auth::Auth::OpenaiApiKey {
+                    api_key: "test-openai-key".to_string(),
+                },
+            );
+            auth.inner_mut().insert(
+                SupportedProvider::Minimax,
+                crate::auth::Auth::MinimaxApiKey {
+                    api_key: "test-minimax-key".to_string(),
+                    api_base: "https://api.minimax.io/v1".to_string(),
+                },
+            );
+        }
+        let advertised = handle_session_new(json!(0), &json!({}), &state).await;
+        let session_id = advertised["result"]["sessionId"].as_str().unwrap();
+        let model = advertised["result"]["configOptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["category"] == "model")
+            .unwrap();
+        let values = model["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["options"].as_array().unwrap())
+            .filter_map(|option| option["value"].as_str())
+            .collect::<Vec<_>>();
+        assert!(values.contains(&"codex/gpt-5.6-luna"));
+        assert!(values.contains(&"minimax/MiniMax-M3"));
+        assert_eq!(model["currentValue"], "codex/gpt-5.5");
+
+        let (writer, _output) = shared_writer();
+        let switched = handle_session_set_config_option(
+            json!(1),
+            &json!({
+                "sessionId": session_id,
+                "configId": "model",
+                "value": "minimax/MiniMax-M3",
+            }),
+            &state,
+            writer,
+        )
+        .await;
+        assert!(switched.get("error").is_none(), "{switched}");
+        let model = switched["result"]["configOptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["category"] == "model")
+            .unwrap();
+        assert_eq!(model["currentValue"], "minimax/MiniMax-M3");
+        let saved = state.sessions.get(session_id).unwrap();
+        assert_eq!(saved.provider, SupportedProvider::Minimax);
+        assert_eq!(saved.model, "MiniMax-M3");
     }
 
     #[test]

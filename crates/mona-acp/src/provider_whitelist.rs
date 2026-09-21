@@ -71,6 +71,15 @@ impl SupportedProvider {
         }
     }
 
+    /// Human-readable provider label used in ACP model-picker groups.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Codex => "OpenAI",
+            Self::Claude => "Anthropic",
+            Self::Minimax => "MiniMax",
+        }
+    }
+
     /// All supported providers, in display order.
     pub fn all() -> &'static [SupportedProvider] {
         &[Self::Codex, Self::Claude, Self::Minimax]
