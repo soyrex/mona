@@ -139,7 +139,9 @@ fn full_session_lifecycle() {
     assert_eq!(new_resp["result"]["effort"], "high");
     assert_eq!(new_resp["result"]["provider"], "codex");
 
-    // 2. session/prompt
+    // 2. session/prompt — no auth is configured for this session, so the
+    //    handler must surface `unauthenticated` (-32002) rather than
+    //    pretending to drive a model turn.
     writeln!(
         stdin,
         r#"{{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{{"sessionId":"{session_id}","text":"hello mona"}}}}"#
@@ -148,7 +150,13 @@ fn full_session_lifecycle() {
     line.clear();
     reader.read_line(&mut line).expect("read prompt resp");
     let prompt_resp: Value = serde_json::from_str(line.trim()).expect("prompt resp json");
-    assert_eq!(prompt_resp["result"]["stopReason"], "phase2.5_routing_done");
+    assert_eq!(prompt_resp["error"]["code"], -32002);
+    assert!(
+        prompt_resp["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("no configured auth")
+    );
 
     // 3. session/set_model
     writeln!(
@@ -250,7 +258,10 @@ fn per_turn_router_fires_on_session_prompt() {
         .expect("sessionId")
         .to_string();
 
-    // 2. session/prompt with a complex prompt (triggers Strong tier)
+    // 2. session/prompt with a complex prompt (triggers Strong tier).
+    //    No auth is configured, so the prompt itself fails with
+    //    `unauthenticated` (-32002). The router still fires first and
+    //    persists its trace, which we assert on next.
     writeln!(
         stdin,
         r#"{{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{{"sessionId":"{session_id}","text":"design a new architecture for the auth system across the codebase"}}}}"#
@@ -260,16 +271,7 @@ fn per_turn_router_fires_on_session_prompt() {
     reader.read_line(&mut line).expect("read prompt resp");
     let prompt_resp: Value = serde_json::from_str(line.trim()).expect("prompt resp json");
 
-    assert_eq!(prompt_resp["result"]["stopReason"], "phase2.5_routing_done");
-    assert_eq!(prompt_resp["result"]["applied"], true);
-    assert_eq!(prompt_resp["result"]["tier"], "strong");
-    assert!(
-        prompt_resp["result"]["model"]
-            .as_str()
-            .unwrap()
-            .starts_with("strong:")
-    );
-    assert_eq!(prompt_resp["result"]["effort"], "high");
+    assert_eq!(prompt_resp["error"]["code"], -32002);
 
     // 3. Verify a router-trace JSON was persisted
     let trace_dir = tmp_home.join("router-traces");
