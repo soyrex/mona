@@ -94,6 +94,82 @@ struct McpToolBridge {
     approval: Arc<dyn ApprovalBroker>,
 }
 
+struct CanonicalToolBridge {
+    inner: Arc<dyn Tool>,
+    approval: Arc<dyn ApprovalBroker>,
+    approval_actions: CanonicalApproval,
+    reject_unmanaged_background: bool,
+}
+
+enum CanonicalApproval {
+    Always,
+    Actions(&'static [&'static str]),
+}
+
+#[async_trait]
+impl Tool for CanonicalToolBridge {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn parameters_schema(&self) -> Value {
+        self.inner.parameters_schema()
+    }
+
+    async fn execute(&self, mut input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        strip_transport_metadata(&mut input);
+        if self.reject_unmanaged_background
+            && let Some(command) = input.get("command").and_then(Value::as_str)
+            && let Some(reason) = unmanaged_background_reason(command)
+        {
+            bail!(
+                "unmanaged background process rejected ({reason}). Use this bash tool with run_in_background=true, then monitor the returned task with bg wait/status/output so the ACP prompt remains active until completion"
+            );
+        }
+
+        let requires_approval = match self.approval_actions {
+            CanonicalApproval::Always => true,
+            CanonicalApproval::Actions(actions) => {
+                let explicit = input
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .map(str::to_ascii_lowercase);
+                let inferred = input
+                    .get("intent")
+                    .and_then(Value::as_str)
+                    .map(str::to_ascii_lowercase);
+                explicit
+                    .as_deref()
+                    .is_some_and(|action| actions.contains(&action))
+                    || (explicit.is_none()
+                        && inferred.as_deref().is_some_and(|intent| {
+                            (actions.contains(&"cancel")
+                                && (intent.contains("cancel") || intent.contains("stop")))
+                                || (actions.contains(&"cleanup") && intent.contains("clean"))
+                        }))
+            }
+        };
+        if requires_approval
+            && !self
+                .approval
+                .approve(ApprovalRequest {
+                    request_id: ctx.tool_call_id.clone(),
+                    tool_name: self.name().to_string(),
+                    input: input.clone(),
+                })
+                .await
+        {
+            bail!("permission denied by host");
+        }
+
+        self.inner.execute(input, ctx).await
+    }
+}
+
 #[async_trait]
 impl Tool for McpToolBridge {
     fn name(&self) -> &str {
@@ -139,6 +215,70 @@ fn strip_agent_metadata(input: &mut Value) {
     }
 }
 
+fn strip_transport_metadata(input: &mut Value) {
+    if let Some(object) = input.as_object_mut() {
+        object.remove("accept_large_output");
+    }
+}
+
+/// Detect shell constructs that let a process escape Mona's tracked task
+/// lifecycle. Quoted and escaped ampersands are data, while `&&`, `>&`, and
+/// `&>` are ordinary shell syntax rather than background operators.
+fn unmanaged_background_reason(command: &str) -> Option<&'static str> {
+    let mut unquoted = String::with_capacity(command.len());
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in command.chars() {
+        if escaped {
+            unquoted.push(' ');
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            unquoted.push(' ');
+            escaped = true;
+            continue;
+        }
+        match quote {
+            Some(active) if ch == active => {
+                quote = None;
+                unquoted.push(' ');
+            }
+            Some(_) => unquoted.push(' '),
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                unquoted.push(' ');
+            }
+            None => unquoted.push(ch),
+        }
+    }
+
+    let lower = unquoted.to_ascii_lowercase();
+    if lower
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'))
+        .any(|word| matches!(word, "nohup" | "disown" | "setsid"))
+    {
+        return Some("detaching command");
+    }
+
+    let chars = unquoted.as_bytes();
+    for (index, ch) in chars.iter().enumerate() {
+        if *ch != b'&' {
+            continue;
+        }
+        let previous = index.checked_sub(1).and_then(|i| chars.get(i)).copied();
+        let next = chars.get(index + 1).copied();
+        if previous != Some(b'&')
+            && next != Some(b'&')
+            && previous != Some(b'>')
+            && next != Some(b'>')
+        {
+            return Some("shell background operator '&'");
+        }
+    }
+    None
+}
+
 fn context_cwd(ctx: &ToolContext) -> Result<PathBuf> {
     ctx.working_dir
         .clone()
@@ -164,15 +304,10 @@ pub(crate) async fn run_turn(
     let registry = Registry::empty();
     let mut allowed = HashSet::new();
 
-    // Provider-facing names follow the canonical jcode vocabulary. The
-    // implementations remain the smaller ACP-owned tools so every mutation is
-    // mediated by Monitter's allow-once request.
-    for (source, advertised) in [
-        ("read_file", "read"),
-        ("write_file", "write"),
-        ("bash", "bash"),
-        ("ls", "ls"),
-    ] {
+    // Provider-facing names follow the canonical jcode vocabulary. Small file
+    // tools remain ACP-owned so their mutations use Monitter's allow-once
+    // request. Shell execution uses Mona's canonical tracked implementation.
+    for (source, advertised) in [("read_file", "read"), ("write_file", "write"), ("ls", "ls")] {
         let tool = tools
             .get(source)
             .with_context(|| format!("missing ACP tool '{source}'"))?;
@@ -190,6 +325,24 @@ pub(crate) async fn run_turn(
             .register(advertised.to_string(), Arc::new(bridge))
             .await;
     }
+
+    let bash = CanonicalToolBridge {
+        inner: mona_app_core::tool::canonical_bash_tool(),
+        approval: approval.clone(),
+        approval_actions: CanonicalApproval::Always,
+        reject_unmanaged_background: true,
+    };
+    allowed.insert("bash".to_string());
+    registry.register("bash".to_string(), Arc::new(bash)).await;
+
+    let bg = CanonicalToolBridge {
+        inner: mona_app_core::tool::canonical_bg_tool(),
+        approval: approval.clone(),
+        approval_actions: CanonicalApproval::Actions(&["cancel", "cleanup"]),
+        reject_unmanaged_background: false,
+    };
+    allowed.insert("bg".to_string());
+    registry.register("bg".to_string(), Arc::new(bg)).await;
 
     for definition in mcp_tools.definitions() {
         let name = definition.name.clone();
@@ -223,13 +376,22 @@ pub(crate) async fn run_turn(
     if let Some(queue) = soft_interrupt_queue {
         agent.use_soft_interrupt_queue(queue);
     }
+    agent.require_background_tasks_terminal(true);
     let shutdown = agent.graceful_shutdown_signal();
     let cancellation_monitor = tokio::spawn(async move {
         cancellation.cancelled().await;
         shutdown.fire();
     });
     let result = agent
-        .run_once_streaming_mpsc(prompt, Vec::new(), None, events)
+        .run_once_streaming_mpsc(
+            prompt,
+            Vec::new(),
+            Some(
+                "ACP task lifecycle: never end this prompt while work you launched is still running. Do not detach processes with nohup, disown, setsid, or shell `&`. For long work, call bash with run_in_background=true, then use bg wait/status/output until it is terminal and verify the result before answering."
+                    .to_string(),
+            ),
+            events,
+        )
         .await;
     cancellation_monitor.abort();
     result
@@ -414,6 +576,184 @@ mod tests {
             tools,
             approval,
         }
+    }
+
+    #[test]
+    fn unmanaged_background_detection_ignores_data_and_redirection() {
+        for command in [
+            "printf '%s' 'cats & dogs'",
+            "printf \"nohup & disown\"",
+            "printf ok 2>&1",
+            "first && second",
+            "printf '\\&'",
+        ] {
+            assert_eq!(
+                unmanaged_background_reason(command),
+                None,
+                "ordinary shell syntax was rejected: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn unmanaged_background_detection_blocks_process_escape() {
+        for command in [
+            "nohup worker >worker.log 2>&1 &",
+            "worker &",
+            "worker & echo launched",
+            "setsid worker",
+            "worker; disown",
+        ] {
+            assert!(
+                unmanaged_background_reason(command).is_some(),
+                "process escape was accepted: {command}"
+            );
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct BackgroundLifecycleProvider {
+        calls: Arc<Mutex<usize>>,
+        requests: Arc<Mutex<Vec<Vec<Message>>>>,
+    }
+
+    #[async_trait]
+    impl Provider for BackgroundLifecycleProvider {
+        async fn complete(
+            &self,
+            messages: &[Message],
+            tools: &[ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> Result<EventStream> {
+            assert!(tools.iter().any(|tool| tool.name == "bash"));
+            assert!(tools.iter().any(|tool| tool.name == "bg"));
+            self.requests
+                .lock()
+                .expect("record lifecycle request")
+                .push(messages.to_vec());
+            let call = {
+                let mut calls = self.calls.lock().expect("count lifecycle calls");
+                *calls += 1;
+                *calls
+            };
+            let events = match call {
+                1 => vec![
+                    StreamEvent::ToolUseStart {
+                        id: "background-bash".to_string(),
+                        name: "bash".to_string(),
+                    },
+                    StreamEvent::ToolInputDelta(
+                        serde_json::json!({
+                            "command": "sleep 1; printf finished",
+                            "intent": "run lifecycle test work",
+                            "run_in_background": true,
+                            "notify": false
+                        })
+                        .to_string(),
+                    ),
+                    StreamEvent::ToolUseEnd,
+                    StreamEvent::MessageEnd {
+                        stop_reason: Some("tool_use".to_string()),
+                    },
+                ],
+                2 => vec![
+                    StreamEvent::TextDelta("The task is still running.".to_string()),
+                    StreamEvent::MessageEnd {
+                        stop_reason: Some("end_turn".to_string()),
+                    },
+                ],
+                3 => vec![
+                    StreamEvent::ToolUseStart {
+                        id: "background-wait".to_string(),
+                        name: "bg".to_string(),
+                    },
+                    StreamEvent::ToolInputDelta(
+                        serde_json::json!({
+                            "action": "wait",
+                            "latest": true,
+                            "session_only": true,
+                            "max_wait_seconds": 5,
+                            "return_on_progress": false
+                        })
+                        .to_string(),
+                    ),
+                    StreamEvent::ToolUseEnd,
+                    StreamEvent::MessageEnd {
+                        stop_reason: Some("tool_use".to_string()),
+                    },
+                ],
+                4 => vec![
+                    StreamEvent::TextDelta(
+                        "The tracked task completed and was verified.".to_string(),
+                    ),
+                    StreamEvent::MessageEnd {
+                        stop_reason: Some("end_turn".to_string()),
+                    },
+                ],
+                other => panic!("unexpected lifecycle provider call {other}"),
+            };
+            Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))))
+        }
+
+        fn name(&self) -> &str {
+            "background-lifecycle-test"
+        }
+
+        fn model(&self) -> String {
+            "gpt-5-test".to_string()
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(self.clone())
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn acp_turn_monitors_tracked_background_work_before_finishing() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("lock MONA_HOME");
+        let home = tempfile::tempdir().expect("temporary MONA_HOME");
+        let _home = TestHomeGuard::set(home.path());
+        let cwd = tempfile::tempdir().expect("temporary workspace");
+        let provider = Arc::new(BackgroundLifecycleProvider::default());
+        let session = acp_session(
+            format!("agentic-background-{}", uuid::Uuid::new_v4()),
+            provider.clone(),
+            cwd.path(),
+        );
+        let approval = Arc::new(ScriptedApproval::new([true]));
+        let (events, _receiver) = mpsc::unbounded_channel();
+
+        run_turn(
+            &session,
+            Arc::new(mona_acp_tools::default_registry()),
+            SessionMcpTools::default(),
+            approval.clone(),
+            events,
+            "run the task and stay with it until completion",
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("tracked ACP background turn");
+
+        assert_eq!(
+            *provider.calls.lock().expect("read lifecycle call count"),
+            4,
+            "the premature model completion must be followed by a guard round and bg wait"
+        );
+        let requests = provider.requests.lock().expect("read lifecycle requests");
+        let guard_text = text_blocks(&requests[2]);
+        assert!(
+            guard_text
+                .iter()
+                .any(|text| text.contains("[ACP lifecycle guard]") && text.contains("bg")),
+            "the model did not receive the lifecycle guard: {guard_text:?}"
+        );
+        let approvals = approval.requests.lock().expect("read lifecycle approvals");
+        assert_eq!(approvals.len(), 1, "only bash needs approval in this flow");
+        assert_eq!(approvals[0].tool_name, "bash");
     }
 
     #[tokio::test]

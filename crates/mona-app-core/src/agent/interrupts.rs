@@ -49,6 +49,53 @@ pub(super) enum PostToolInterruptOutcome {
 }
 
 impl Agent {
+    pub(super) async fn continue_for_running_background_tasks(&mut self) -> bool {
+        if !self.require_background_tasks_terminal || self.is_graceful_shutdown() {
+            return false;
+        }
+
+        let mut task_ids = crate::background::global()
+            .list()
+            .await
+            .into_iter()
+            .filter(|task| {
+                task.session_id == self.session_id()
+                    && !task.detached
+                    && matches!(task.status, crate::bus::BackgroundTaskStatus::Running)
+            })
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>();
+        if task_ids.is_empty() {
+            return false;
+        }
+        task_ids.sort();
+
+        let task_list = task_ids
+            .iter()
+            .map(|task_id| format!("`{task_id}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.add_message_with_display_role(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: format!(
+                    "[ACP lifecycle guard] This prompt still owns {} running background task(s): {}. Do not end the turn yet. Use the `bg` tool with `wait`, `status`, or `output` to monitor them until every task is terminal, verify the result, and only then give the final answer.",
+                    task_ids.len(),
+                    task_list
+                ),
+                cache_control: None,
+            }],
+            Some(StoredDisplayRole::System),
+        );
+        self.persist_session_best_effort("ACP background lifecycle guard");
+        logging::info(&format!(
+            "ACP_BACKGROUND_LIFECYCLE_CONTINUE session={} tasks={}",
+            self.session_id(),
+            task_ids.join(",")
+        ));
+        true
+    }
+
     pub fn restore_persisted_soft_interrupts(&self) -> usize {
         let restored = match crate::soft_interrupt_store::take(self.session_id()) {
             Ok(items) => items,

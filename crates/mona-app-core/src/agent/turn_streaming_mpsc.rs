@@ -1207,6 +1207,9 @@ impl Agent {
                     &mut incomplete_continuations,
                 )? {
                     NoToolCallOutcome::Break => {
+                        if self.continue_for_running_background_tasks().await {
+                            continue;
+                        }
                         // Surface silent guardrail/refusal stops: the provider
                         // ended the turn with no visible output (e.g. Anthropic
                         // stop_reason "refusal", or a reasoning-only response).

@@ -263,6 +263,10 @@ pub struct Agent {
     /// Prevent duplicate content uploads when shutdown/finalization is invoked
     /// more than once for the same in-memory agent.
     transcript_telemetry_sent: bool,
+    /// When enabled, a model completion is treated as an interim update while
+    /// this session still owns tracked background work. ACP enables this so a
+    /// prompt remains alive until the work it launched reaches a terminal state.
+    require_background_tasks_terminal: bool,
     /// One logical runtime session, independent of the process-global legacy
     /// telemetry slot and of any TUI clients viewing this agent.
     concurrency_session: Option<crate::telemetry::ConcurrencySession>,
@@ -342,6 +346,7 @@ impl Agent {
             inline_output_tap: false,
             inline_tail: inline_tail::InlineTailBuffer::default(),
             transcript_telemetry_sent: false,
+            require_background_tasks_terminal: false,
             concurrency_session: None,
         }
     }
@@ -989,6 +994,14 @@ impl Agent {
 
     pub fn session_id(&self) -> &str {
         &self.session.id
+    }
+
+    /// Keep the current model/tool loop alive while this session owns tracked
+    /// background work. Intended for transports whose prompt lifecycle must
+    /// represent completion of the requested work, rather than merely process
+    /// launch.
+    pub fn require_background_tasks_terminal(&mut self, required: bool) {
+        self.require_background_tasks_terminal = required;
     }
 
     /// Desktop self-development is selected by the session checkout, including

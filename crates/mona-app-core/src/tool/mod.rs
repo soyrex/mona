@@ -23,10 +23,10 @@ mod gmail;
 mod goal;
 pub mod inflight;
 mod invalid;
-mod mona_docs;
 mod ls;
 pub mod mcp;
 mod memory;
+mod mona_docs;
 mod multiedit;
 mod open;
 mod panel;
@@ -1583,6 +1583,21 @@ impl Registry {
     pub fn compaction(&self) -> Arc<RwLock<CompactionManager>> {
         self.compaction.clone()
     }
+}
+
+/// Canonical shell tool for lightweight adapters that deliberately construct
+/// an otherwise-empty registry (for example the ACP transport).
+///
+/// Keeping construction here lets those adapters reuse background task
+/// tracking, timeout promotion, progress reporting, and cancellation without
+/// exposing the implementation module itself.
+pub fn canonical_bash_tool() -> Arc<dyn Tool> {
+    Arc::new(bash::BashTool::new())
+}
+
+/// Canonical background-task monitor paired with [`canonical_bash_tool`].
+pub fn canonical_bg_tool() -> Arc<dyn Tool> {
+    Arc::new(bg::BgTool::new())
 }
 
 /// Classic Levenshtein edit distance over Unicode scalar values.
