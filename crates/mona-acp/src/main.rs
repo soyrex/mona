@@ -55,17 +55,17 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&home).ok();
     std::fs::create_dir_all(home.join("router-traces")).ok();
 
-    let (classifier, classifier_startup) = classifier_from_environment();
+    let (classifier, classifier_startup) = classifier_from_environment(&home);
     match classifier_startup {
         ClassifierStartup::Live => tracing::info!("live Jev ACP classifier enabled"),
         ClassifierStartup::RuleBasedDisabled => tracing::info!(
-            "using offline rule-based classifier; set MONA_ACP_LIVE_JEV=1 to opt into live Jev ACP routing"
+            "using offline rule-based classifier; set MONA_ACP_LIVE_JEV=1 to opt into live Jev ACP routing or 0 to force offline routing"
         ),
-        ClassifierStartup::RuleBasedInvalidOptIn => tracing::warn!(
-            "MONA_ACP_LIVE_JEV must be exactly 1; using offline rule-based classifier"
+        ClassifierStartup::UnavailableInvalidOptIn => tracing::warn!(
+            "invalid live Jev activation/configuration; routing will report unavailable and retain the current model, without heuristic fallback"
         ),
-        ClassifierStartup::RuleBasedUnavailable => tracing::warn!(
-            "live Jev ACP opt-in has no usable ACP configuration; using offline rule-based classifier"
+        ClassifierStartup::UnavailableLiveJev => tracing::warn!(
+            "live Jev ACP opt-in has no usable credential configuration; routing will report unavailable and retain the current model, without heuristic fallback"
         ),
     }
     let state = ServerState::new(home.clone(), classifier);

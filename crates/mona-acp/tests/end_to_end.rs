@@ -54,6 +54,7 @@ fn mona_acp_bin() -> std::path::PathBuf {
 
 fn send_one(bin: &std::path::Path, frames: &[&str]) -> Vec<Value> {
     let mut child = Command::new(bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_ACP_LOG", "error")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -143,6 +144,7 @@ fn full_session_lifecycle() {
     // provider credentials in their normal Mona home.
     let home = tempfile::tempdir().expect("temporary Mona home");
     let mut child = Command::new(&bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_HOME", home.path())
         .env("MONA_ACP_LOG", "error")
         .env_remove("OPENAI_API_KEY")
@@ -289,6 +291,7 @@ fn per_turn_router_fires_on_session_prompt() {
     std::fs::create_dir_all(&tmp_home).unwrap();
 
     let mut child = Command::new(&bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_ACP_LOG", "error")
         .env("MONA_HOME", &tmp_home)
         .env_remove("OPENAI_API_KEY")
@@ -382,6 +385,7 @@ fn sensitive_prompt_short_circuits_to_permission_required() {
     std::fs::create_dir_all(&tmp_home).unwrap();
 
     let mut child = Command::new(&bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_ACP_LOG", "error")
         .env("MONA_HOME", &tmp_home)
         .stdin(Stdio::piped())
@@ -444,6 +448,7 @@ fn auth_loader_reports_unconfigured_provider() {
     std::fs::create_dir_all(&tmp_home).unwrap();
 
     let mut child = Command::new(&bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_ACP_LOG", "error")
         .env("MONA_HOME", &tmp_home)
         // Explicitly clear the env-var fallback paths so the test
@@ -534,6 +539,7 @@ fn auth_loader_picks_up_api_key_file() {
     .unwrap();
 
     let mut child = Command::new(&bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_ACP_LOG", "error")
         .env("MONA_HOME", &tmp_home)
         .env_remove("OPENAI_API_KEY")
@@ -713,6 +719,7 @@ fn session_new_reports_provider_name_when_auth_configured() {
     .unwrap();
 
     let mut child = Command::new(&bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_ACP_LOG", "error")
         .env("MONA_HOME", &tmp_home)
         .env_remove("OPENAI_API_KEY")
@@ -752,6 +759,7 @@ fn session_new_reports_provider_name_when_auth_configured() {
     std::fs::create_dir_all(&tmp_home_b).unwrap();
 
     let mut child_b = Command::new(&bin)
+        .env("MONA_ACP_LIVE_JEV", "0")
         .env("MONA_ACP_LOG", "error")
         .env("MONA_HOME", &tmp_home_b)
         .env_remove("OPENAI_API_KEY")

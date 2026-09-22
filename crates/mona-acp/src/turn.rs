@@ -185,11 +185,14 @@ pub async fn run_turn_with_jev_context(
     );
 
     // 2. Classify
+    let mut reused_cached_plan = false;
     let plan = match classifier.classify(&req).await {
         Ok(p) => p,
         Err(e) => {
-            if let Some(plan) = cached_plan {
+            if let Some(mut plan) = cached_plan {
                 warn!(error = %e, "classifier errored; using cached plan through normal safety gates");
+                reused_cached_plan = true;
+                plan.rationale = "Classifier unavailable; reusing a previous routing decision (not a fresh live classification).".into();
                 plan
             } else {
                 warn!(error = %e, "classifier errored; keeping current model");
@@ -258,12 +261,12 @@ pub async fn run_turn_with_jev_context(
         SafetyVerdict::Refuse => (
             None,
             None,
-            reason_for_refuse(
+            format!("{}; proposal source: {}", reason_for_refuse(
                 &plan,
                 cooldown_active,
                 swap_budget_exhausted,
                 config.confidence_floor,
-            ),
+            ), plan.rationale),
         ),
         SafetyVerdict::Apply | SafetyVerdict::Modified => {
             let effective = modified_plan.as_ref().unwrap_or(&plan);
@@ -288,7 +291,9 @@ pub async fn run_turn_with_jev_context(
         session_id: session.id.clone(),
         prompt_fingerprint: fingerprint(user_message),
         occurred_at: now_ms(),
-        trigger: if turn_count == 0 {
+        trigger: if reused_cached_plan {
+            crate::trace::TraceTrigger::ClassifierUnavailable
+        } else if turn_count == 0 {
             crate::trace::TraceTrigger::InitialPrompt
         } else {
             crate::trace::TraceTrigger::TurnReclassified
@@ -519,6 +524,10 @@ pub fn build_request_from_session_with_context(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // These are Jcode UI orchestration modes, not provider reasoning values.
+    // Offering them to Jev can both exceed the effort bound and request an
+    // unintended swarm rather than configure the selected model.
+    remove_ui_effort_modes(&mut available_efforts);
     if available_efforts.is_empty() {
         available_efforts =
             if session.provider == crate::provider_whitelist::SupportedProvider::Minimax {
@@ -544,6 +553,10 @@ pub fn build_request_from_session_with_context(
         available_models,
         available_efforts,
     }
+}
+
+fn remove_ui_effort_modes(efforts: &mut Vec<String>) {
+    efforts.retain(|effort| !matches!(effort.as_str(), "swarm" | "swarm-deep"));
 }
 
 /// Convert a TurnRoutingDecision to the JSON shape sent over the
@@ -605,6 +618,26 @@ mod tests {
             ],
             handle: None,
         }
+    }
+
+    #[test]
+    fn routing_efforts_exclude_orchestration_ui_modes() {
+        let mut efforts = [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "swarm",
+            "swarm-deep",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        remove_ui_effort_modes(&mut efforts);
+        assert_eq!(efforts.len(), 7);
+        assert!(!efforts.iter().any(|effort| effort.starts_with("swarm")));
     }
 
     #[tokio::test]
@@ -939,5 +972,42 @@ mod tests {
             request.last_turn_outcome,
             Some(JevTurnOutcome::Failed { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn cached_route_is_never_reported_as_fresh_live_classification() {
+        struct Unavailable;
+        #[async_trait::async_trait]
+        impl JevClassifier for Unavailable {
+            async fn classify(
+                &self,
+                _: &JevClassifyRequest,
+            ) -> Result<JevRoutePlan, mona_jev::JevError> {
+                Err(mona_jev::JevError::Offline("unavailable".into()))
+            }
+        }
+        let plan = JevRoutePlan::passthrough(ModelTier::Balanced, Some("medium".into()));
+        let result = run_turn_with_jev_context(
+            Arc::new(Unavailable),
+            &session(),
+            "continue",
+            1,
+            0,
+            vec![],
+            None,
+            Some(plan),
+            false,
+            &RouterConfig::default(),
+            std::path::Path::new("/tmp/mona-test"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.trace.trigger.as_str(), "classifier_unavailable");
+        assert!(
+            result
+                .trace
+                .rationale
+                .contains("not a fresh live classification")
+        );
     }
 }

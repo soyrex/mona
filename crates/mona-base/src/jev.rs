@@ -148,8 +148,21 @@ impl JevClient {
         Self::for_purpose(JevPurpose::Acp)
     }
 
+    /// Resolve an explicitly selected ACP account route, without changing
+    /// process environment or falling back to another provider.
+    pub fn for_acp_provider(selector: &str) -> Result<Self> {
+        Self::from_resolved(JevPurpose::Acp, Self::resolve_selector(selector)?)
+    }
+
     fn for_purpose(purpose: JevPurpose) -> Result<Self> {
-        let (provider, api_key, endpoint, me_endpoint) = Self::resolve(purpose)?;
+        Self::from_resolved(purpose, Self::resolve(purpose)?)
+    }
+
+    fn from_resolved(
+        purpose: JevPurpose,
+        resolved: (JevProvider, String, String, Option<String>),
+    ) -> Result<Self> {
+        let (provider, api_key, endpoint, me_endpoint) = resolved;
         let client = client_builder()
             .build()
             .map_err(|_| anyhow!("Could not initialize the Jev decision client"))?;
@@ -168,7 +181,11 @@ impl JevClient {
             |key| std::env::var(key),
             || crate::config::config().agents.memory_jev_provider.clone(),
         )?;
-        let (provider, api_key) = resolve_with(&selector, |env, file| {
+        Self::resolve_selector(&selector)
+    }
+
+    fn resolve_selector(selector: &str) -> Result<(JevProvider, String, String, Option<String>)> {
+        let (provider, api_key) = resolve_with(selector, |env, file| {
             // Unlike the API-key helper, this does not consult registered
             // cross-provider fallback resolvers or the shared compatible slot.
             crate::provider_catalog::load_env_value_from_env_or_config(env, file)
