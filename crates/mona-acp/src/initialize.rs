@@ -80,6 +80,12 @@ pub fn initialize_result(
         ],
         "configuredProviders": configured,
         "jevRoutePolicy": policy.as_str(),
+        "_meta": {
+            "mona/extensions": {
+                "version": 1,
+                "methods": ["mona/session/steer"]
+            }
+        },
         "agentInfo": {
             "name": server_name,
             "version": server_version,
@@ -115,6 +121,11 @@ mod tests {
         assert_eq!(r["agentInfo"]["monitter_harness"], true);
         assert_eq!(r["agentCapabilities"]["mcpCapabilities"]["http"], true);
         assert_eq!(r["agentCapabilities"]["mcpCapabilities"]["sse"], false);
+        assert_eq!(r["_meta"]["mona/extensions"]["version"], 1);
+        assert_eq!(
+            r["_meta"]["mona/extensions"]["methods"],
+            json!(["mona/session/steer"])
+        );
     }
 
     #[test]

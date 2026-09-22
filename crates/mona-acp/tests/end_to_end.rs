@@ -101,6 +101,10 @@ fn initialize_returns_protocol_v1_and_monitter_extensions() {
         true
     );
     assert_eq!(r["result"]["agentInfo"]["monitter_harness"], true);
+    assert_eq!(
+        r["result"]["_meta"]["mona/extensions"]["methods"],
+        serde_json::json!(["mona/session/steer"])
+    );
     let auth_ids: Vec<&str> = r["result"]["authMethods"]
         .as_array()
         .unwrap()
@@ -141,6 +145,9 @@ fn full_session_lifecycle() {
     let mut child = Command::new(&bin)
         .env("MONA_HOME", home.path())
         .env("MONA_ACP_LOG", "error")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("MINIMAX_API_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -284,6 +291,9 @@ fn per_turn_router_fires_on_session_prompt() {
     let mut child = Command::new(&bin)
         .env("MONA_ACP_LOG", "error")
         .env("MONA_HOME", &tmp_home)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("MINIMAX_API_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -349,6 +359,8 @@ fn per_turn_router_fires_on_session_prompt() {
         r#"{{"jsonrpc":"2.0","id":3,"method":"session/cancel","params":{{"sessionId":"{session_id}"}}}}"#
     )
     .expect("write cancel");
+    let cancel_resp = read_response_for_id(&mut reader, 3);
+    assert_eq!(cancel_resp["result"]["cancelled"], true);
     drop(stdin);
     let _ = child.wait();
 

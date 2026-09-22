@@ -26,13 +26,14 @@ use crate::turn::{
 };
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
+use mona_app_core::agent::{SoftInterruptMessage, SoftInterruptQueue, SoftInterruptSource};
 use mona_jev::{JevClassifier, JevRole, JevTurnOutcome};
 use mona_message_types::{ContentBlock, Message, Role, StreamEvent, ToolCall};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{Mutex, oneshot};
 use tokio::time::{Duration, timeout};
@@ -51,6 +52,9 @@ type PendingClientResponses = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>
 /// Build the server name + version reported in `initialize`.
 pub const SERVER_NAME: &str = "mona-acp";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_STEER_TEXT_BYTES: usize = 64 * 1024;
+const MAX_PENDING_STEERS: usize = 64;
+const MAX_PENDING_STEER_BYTES: usize = 256 * 1024;
 
 /// Shared, mutable server state. Held behind a Mutex because the session
 /// registry needs interior mutability.
@@ -86,6 +90,16 @@ pub struct ServerState {
     /// stdio reader can therefore service `session/cancel` concurrently with
     /// a streaming provider turn.
     inflight_turns: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Prompt-correlated Jcode soft-interrupt queues exposed through Mona's
+    /// opt-in ACP steering extension. Entries exist only while the canonical
+    /// agent loop can safely consume them.
+    steerable_turns: Arc<Mutex<HashMap<String, SteerableTurn>>>,
+}
+
+#[derive(Clone)]
+struct SteerableTurn {
+    turn_id: String,
+    queue: SoftInterruptQueue,
 }
 
 #[derive(Default, Clone)]
@@ -156,6 +170,7 @@ impl ServerState {
             pending_client_responses: Arc::new(Mutex::new(HashMap::new())),
             client_closed: Arc::new(AtomicBool::new(false)),
             inflight_turns: Arc::new(Mutex::new(HashMap::new())),
+            steerable_turns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -190,6 +205,7 @@ pub async fn run_acp_server(state: ServerState) -> Result<()> {
             for token in state.inflight_turns.lock().await.values() {
                 token.cancel();
             }
+            state.steerable_turns.lock().await.clear();
             while let Some(result) = request_tasks.join_next().await {
                 if let Err(error) = result {
                     warn!(%error, "ACP request task stopped unexpectedly");
@@ -270,6 +286,7 @@ pub async fn handle_frame(line: &str, state: &ServerState, writer: SharedWriter)
         "session/list" => handle_session_list(id, state),
         "session/resume" => handle_session_resume(id, &params, state).await,
         "session/cancel" => handle_session_cancel(id, &params, state).await,
+        "mona/session/steer" => handle_session_steer(id, &params, state).await,
         "session/auth" => handle_session_auth(id, &params, state),
         "session/jev_route" => handle_session_jev_route(id, &params, state).await,
         "session/prompt" => handle_session_prompt(id, &params, state, writer).await,
@@ -687,6 +704,7 @@ async fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -
             true
         })
         .unwrap_or(false);
+    state.steerable_turns.lock().await.remove(session_id);
     for signal in mona_app_core::turn_cancel_registry::active_turn_signals(session_id) {
         signal.fire();
     }
@@ -702,6 +720,92 @@ async fn handle_session_cancel(id: Value, params: &Value, state: &ServerState) -
         warn!(session_id, "session/cancel for unknown session");
         jsonrpc_result(id, json!({ "cancelled": false }))
     }
+}
+
+fn prompt_turn_id(id: &Value) -> Option<String> {
+    match id {
+        Value::Number(value) => Some(format!("acp:{value}")),
+        Value::String(value) if !value.is_empty() && value.len() <= 240 => {
+            Some(format!("acp:{value}"))
+        }
+        _ => None,
+    }
+}
+
+/// Mona's opt-in ACP steering extension. This is Jcode's soft interrupt at
+/// the protocol boundary: accepted text is injected by the canonical agent at
+/// its next safe point without cancelling or replacing the active prompt.
+async fn handle_session_steer(id: Value, params: &Value, state: &ServerState) -> Value {
+    let Some(session_id) = params.get("sessionId").and_then(Value::as_str) else {
+        return jsonrpc_error(id, -32602, "missing sessionId");
+    };
+    let Some(expected_turn_id) = params.get("expectedTurnId").and_then(Value::as_str) else {
+        return jsonrpc_error(id, -32602, "missing expectedTurnId");
+    };
+    let Some(client_request_id) = params.get("clientRequestId").and_then(Value::as_str) else {
+        return jsonrpc_error(id, -32602, "missing clientRequestId");
+    };
+    let Some(text) = params.get("text").and_then(Value::as_str) else {
+        return jsonrpc_error(id, -32602, "missing text");
+    };
+    if expected_turn_id.is_empty() || expected_turn_id.len() > 256 {
+        return jsonrpc_error(id, -32602, "invalid expectedTurnId");
+    }
+    if client_request_id.is_empty() || client_request_id.len() > 256 {
+        return jsonrpc_error(id, -32602, "invalid clientRequestId");
+    }
+    if text.trim().is_empty() || text.len() > MAX_STEER_TEXT_BYTES {
+        return jsonrpc_error(id, -32602, "steering text is empty or too large");
+    }
+
+    let active = state.steerable_turns.lock().await.get(session_id).cloned();
+    let Some(active) = active else {
+        return jsonrpc_error(id, -32001, "no active steerable prompt for this session");
+    };
+    if active.turn_id != expected_turn_id {
+        return jsonrpc_error(id, -32002, "the requested ACP prompt is no longer active");
+    }
+
+    let mut queue = match active.queue.lock() {
+        Ok(queue) => queue,
+        Err(_) => return jsonrpc_error(id, -32603, "soft interrupt queue is unavailable"),
+    };
+    let pending_bytes = queue
+        .iter()
+        .map(|message| message.content.len())
+        .sum::<usize>();
+    if queue.len() >= MAX_PENDING_STEERS
+        || pending_bytes.saturating_add(text.len()) > MAX_PENDING_STEER_BYTES
+    {
+        return jsonrpc_error(id, -32003, "too many steering messages are pending");
+    }
+    if let Err(error) = state
+        .sessions
+        .record_message(session_id, JevRole::User, text)
+    {
+        return jsonrpc_error(
+            id,
+            -32603,
+            &format!("could not persist steering context: {error}"),
+        );
+    }
+    queue.push(SoftInterruptMessage {
+        content: text.to_string(),
+        images: Vec::new(),
+        urgent: false,
+        source: SoftInterruptSource::User,
+    });
+    drop(queue);
+
+    jsonrpc_result(
+        id,
+        json!({
+            "mode": "steered",
+            "sessionId": session_id,
+            "turnId": active.turn_id,
+            "clientRequestId": client_request_id,
+        }),
+    )
 }
 
 /// `session/auth` — report the auth state for a session's provider.
@@ -1130,11 +1234,22 @@ async fn handle_session_prompt(
         .cloned()
         .unwrap_or_default();
 
+    let soft_interrupt_queue: SoftInterruptQueue = Arc::new(StdMutex::new(Vec::new()));
+    if let Some(turn_id) = prompt_turn_id(&id) {
+        state.steerable_turns.lock().await.insert(
+            session_id.clone(),
+            SteerableTurn {
+                turn_id,
+                queue: soft_interrupt_queue.clone(),
+            },
+        );
+    }
+
     // 4. Drive the real provider through Mona's canonical Agent. The Agent
     //    owns full transcript replay, compaction, provider continuation IDs,
     //    tool-result repair, and durable resume. ACP-owned tool adapters keep
     //    every mutation behind Monitter's allow-once boundary.
-    let outcome = match drive_canonical_agent(
+    let outcome_result = drive_canonical_agent(
         &session,
         state.tools.clone(),
         mcp_tools,
@@ -1143,9 +1258,11 @@ async fn handle_session_prompt(
         &session_id,
         &text,
         cancellation.clone(),
+        Some(soft_interrupt_queue),
     )
-    .await
-    {
+    .await;
+    state.steerable_turns.lock().await.remove(&session_id);
+    let outcome = match outcome_result {
         Ok(o) => o,
         Err(e) => {
             let reason = e.to_string();
@@ -1220,6 +1337,7 @@ async fn drive_canonical_agent(
     session_id: &str,
     prompt: &str,
     cancellation: CancellationToken,
+    soft_interrupt_queue: Option<SoftInterruptQueue>,
 ) -> anyhow::Result<PromptOutcome> {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let run = crate::agentic::run_turn(
@@ -1230,6 +1348,7 @@ async fn drive_canonical_agent(
         event_tx,
         prompt,
         cancellation,
+        soft_interrupt_queue,
     );
     let collect = async {
         let mut outcome = PromptOutcome::default();
@@ -2479,6 +2598,84 @@ mod tests {
 
         counters.get_or_insert("session").turn_count = 7;
         assert!(!counters.cooldown_active("session", 2));
+    }
+
+    #[tokio::test]
+    async fn mona_steer_requires_the_exact_active_prompt_and_queues_a_soft_interrupt() {
+        let home = tempfile::tempdir().unwrap();
+        let state = ServerState::new(
+            home.path().to_path_buf(),
+            Arc::new(mona_jev::MockJevClassifier::new()),
+        );
+        let session = state
+            .sessions
+            .new_session("codex", None, None, None, &AuthRegistry::default())
+            .unwrap();
+        let queue: SoftInterruptQueue = Arc::new(StdMutex::new(Vec::new()));
+        state.steerable_turns.lock().await.insert(
+            session.id.clone(),
+            SteerableTurn {
+                turn_id: "acp:17".to_string(),
+                queue: queue.clone(),
+            },
+        );
+
+        let stale = handle_session_steer(
+            json!(20),
+            &json!({
+                "sessionId": session.id,
+                "expectedTurnId": "acp:16",
+                "clientRequestId": "client-stale",
+                "text": "old direction",
+            }),
+            &state,
+        )
+        .await;
+        assert_eq!(stale["error"]["code"], -32002);
+        assert!(queue.lock().unwrap().is_empty());
+
+        let accepted = handle_session_steer(
+            json!(21),
+            &json!({
+                "sessionId": session.id,
+                "expectedTurnId": "acp:17",
+                "clientRequestId": "client-current",
+                "text": "check the tests before editing",
+            }),
+            &state,
+        )
+        .await;
+        assert_eq!(accepted["result"]["mode"], "steered");
+        assert_eq!(accepted["result"]["turnId"], "acp:17");
+        assert_eq!(accepted["result"]["clientRequestId"], "client-current");
+        let queued = queue.lock().unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].content, "check the tests before editing");
+        assert_eq!(queued[0].source, SoftInterruptSource::User);
+        drop(queued);
+        assert!(
+            state
+                .sessions
+                .routing_context(&session.id)
+                .unwrap()
+                .recent_messages
+                .iter()
+                .any(|message| message.content == "check the tests before editing")
+        );
+
+        state.steerable_turns.lock().await.remove(&session.id);
+        let idle = handle_session_steer(
+            json!(22),
+            &json!({
+                "sessionId": session.id,
+                "expectedTurnId": "acp:17",
+                "clientRequestId": "client-late",
+                "text": "too late",
+            }),
+            &state,
+        )
+        .await;
+        assert_eq!(idle["error"]["code"], -32001);
     }
 
     #[tokio::test]

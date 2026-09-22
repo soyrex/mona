@@ -167,6 +167,16 @@ impl Agent {
         Arc::clone(&self.soft_interrupt_queue)
     }
 
+    /// Replace the soft-interrupt queue before a turn starts.
+    ///
+    /// Transport adapters use this to publish a queue before constructing the
+    /// canonical agent, so a correlated live steer can be accepted without a
+    /// race between the protocol handler and the agent loop. Callers must not
+    /// replace the queue after processing has begun.
+    pub fn use_soft_interrupt_queue(&mut self, queue: SoftInterruptQueue) {
+        self.soft_interrupt_queue = queue;
+    }
+
     /// Get a handle to the background tool signal.
     /// The server can use this to signal "move tool to background" without holding the agent lock.
     pub fn background_tool_signal(&self) -> InterruptSignal {

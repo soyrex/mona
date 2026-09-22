@@ -10,7 +10,7 @@ use crate::mcp::SessionMcpTools;
 use crate::session::Session as AcpSession;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use mona_app_core::agent::Agent;
+use mona_app_core::agent::{Agent, SoftInterruptQueue};
 use mona_app_core::protocol::ServerEvent;
 use mona_app_core::session::{Session as MonaSession, session_exists};
 use mona_app_core::tool::{Registry, Tool, ToolContext, ToolOutput};
@@ -155,6 +155,7 @@ pub(crate) async fn run_turn(
     events: mpsc::UnboundedSender<ServerEvent>,
     prompt: &str,
     cancellation: CancellationToken,
+    soft_interrupt_queue: Option<SoftInterruptQueue>,
 ) -> Result<()> {
     let handle = session
         .handle
@@ -219,6 +220,9 @@ pub(crate) async fn run_turn(
         stored,
         Some(allowed),
     );
+    if let Some(queue) = soft_interrupt_queue {
+        agent.use_soft_interrupt_queue(queue);
+    }
     let shutdown = agent.graceful_shutdown_signal();
     let cancellation_monitor = tokio::spawn(async move {
         cancellation.cancelled().await;
@@ -437,6 +441,7 @@ mod tests {
                 events,
                 prompt,
                 CancellationToken::new(),
+                None,
             )
             .await
             .expect("canonical agent turn");
@@ -532,6 +537,7 @@ mod tests {
             events,
             "persisted-user",
             CancellationToken::new(),
+            None,
         )
         .await
         .expect("initial canonical turn");
