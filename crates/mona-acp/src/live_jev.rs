@@ -354,12 +354,12 @@ fn build_decisions_input(req: &JevClassifyRequest) -> Result<BuiltDecisionsInput
     questions.insert(
         "tier".into(),
         choice_question(
-            "Select the least sufficient model tier.",
+            "Which model tier is sufficient for the current task, including unfinished work in the recent conversation? Compare the task with each option's examples and exclusions. When two tiers are sufficient, choose the lower one.",
             [
-                ("fast", "Fast model tier."),
-                ("balanced", "Balanced model tier."),
-                ("strong", "Strong model tier."),
-                ("frontier", "Frontier model tier."),
+                ("fast", "Direct answers, extraction, simple lookup, or a narrow mechanical edit with known steps. Use balanced for diagnosis or a contained feature that needs judgment."),
+                ("balanced", "An ordinary bug fix or contained feature with modest investigation and tests. Use fast for direct or mechanical work; use strong for difficult debugging or unfamiliar multi-file work."),
+                ("strong", "Difficult debugging, unfamiliar subsystem work, multi-file refactoring, or careful technical review. Use balanced for ordinary contained changes; use frontier for ambiguous cross-system architecture or the hardest end-to-end work."),
+                ("frontier", "Ambiguous cross-system architecture, complex end-to-end work, or consequential technical reasoning that needs the most capable offered model. Use strong for difficult but bounded implementation with a clear approach."),
             ],
         ),
     );
@@ -368,10 +368,15 @@ fn build_decisions_input(req: &JevClassifyRequest) -> Result<BuiltDecisionsInput
             .available_efforts
             .iter()
             .enumerate()
-            .map(|(index, effort)| (index.to_string(), Value::String(effort.clone())))
+            .map(|(index, effort)| {
+                (
+                    index.to_string(),
+                    Value::String(format!("{effort}: {}", effort_criterion(effort))),
+                )
+            })
             .collect::<Map<_, _>>();
         questions.insert("effort".into(), serde_json::json!({
-            "type": "choice", "instructions": format!("{POLICY}\nSelect one offered effort option."), "criteria": criteria
+            "type": "choice", "instructions": format!("{POLICY}\nWhich offered reasoning setting is least sufficient to complete this task correctly? Do not infer unsupported capabilities from an effort label."), "criteria": criteria
         }));
     }
     questions.insert(
@@ -471,6 +476,28 @@ fn choice_question<'a>(
         .map(|(id, description)| (id.to_string(), Value::String(description.into())))
         .collect::<Map<_, _>>();
     serde_json::json!({"type": "choice", "instructions": format!("{POLICY}\n{instructions}"), "criteria": criteria})
+}
+
+fn effort_criterion(effort: &str) -> &'static str {
+    match effort {
+        "none" | "disabled" => {
+            "No extended reasoning; suitable only when the task is direct and the chosen model can do it without deliberation."
+        }
+        "minimal" | "low" => "Brief reasoning for a clear, bounded task with little uncertainty.",
+        "medium" => "Moderate reasoning for contained implementation or ordinary diagnosis.",
+        "high" => {
+            "Deeper reasoning for difficult debugging, multi-step implementation, or careful review."
+        }
+        "xhigh" | "max" | "ultra" => {
+            "Highest offered reasoning for unusually complex or ambiguous work where sustained analysis is needed."
+        }
+        "adaptive" => {
+            "Let this provider choose its reasoning effort dynamically when a fixed setting is not clearly preferable."
+        }
+        _ => {
+            "Provider-offered setting; its behavior is unspecified here, so do not infer capabilities from its name."
+        }
+    }
 }
 
 fn decision_message(message: &JevMessage) -> DecisionMessage<'_> {
@@ -756,6 +783,35 @@ mod tests {
                 .contains("cost-sensitive")
         );
         assert_eq!(built.questions["tier"]["type"], "choice");
+    }
+
+    #[test]
+    fn tier_and_effort_choices_explain_neighboring_options() {
+        let built = build_decisions_input(&request()).unwrap();
+        let tier = &built.questions["tier"]["criteria"];
+        assert!(
+            tier["fast"]
+                .as_str()
+                .unwrap()
+                .contains("Use balanced for diagnosis")
+        );
+        assert!(
+            tier["balanced"]
+                .as_str()
+                .unwrap()
+                .contains("Use fast for direct")
+        );
+        assert!(
+            built.questions["tier"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("unfinished work in the recent conversation")
+        );
+
+        let effort = &built.questions["effort"]["criteria"];
+        assert!(effort["0"].as_str().unwrap().contains("Brief reasoning"));
+        assert!(effort["1"].as_str().unwrap().contains("Deeper reasoning"));
+        assert_eq!(built.questions["effort"]["type"], "choice");
     }
 
     #[tokio::test]
